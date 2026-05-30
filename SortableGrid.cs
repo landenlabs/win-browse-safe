@@ -33,6 +33,14 @@ namespace BrowseSafe
         private readonly Func<string>? _summary;
         private readonly GridColumn[] _cols;
         private readonly Action<object>? _onButton;
+        private readonly Func<CheckGroup>? _headerInfo;
+        private readonly RichTextBox? _header;
+        private readonly BusyOverlay _busy = new();
+
+        private static readonly Color HdrPass = Color.FromArgb(0, 140, 0);
+        private static readonly Color HdrWarn = Color.FromArgb(190, 120, 0);
+        private static readonly Color HdrFail = Color.FromArgb(200, 0, 0);
+        private static readonly Color HdrInfo = Color.FromArgb(70, 70, 70);
 
         private List<object> _items = new();
         private int _sortCol;
@@ -51,12 +59,14 @@ namespace BrowseSafe
             Action<object>? onButtonClick = null,
             IEnumerable<(string Label, Action OnClick)>? extraButtons = null,
             string? legend = null,
-            Func<string>? summary = null)
+            Func<string>? summary = null,
+            Func<CheckGroup>? headerInfo = null)
         {
             _loader = loader;
             _cols = columns;
             _onButton = onButtonClick;
             _summary = summary;
+            _headerInfo = headerInfo;
             _sortCol = defaultSortColumn;
             _asc = defaultAscending;
 
@@ -155,7 +165,31 @@ namespace BrowseSafe
             _grid.CellContentClick += OnCellClick;
 
             Controls.Add(_grid);
+            if (_headerInfo != null)
+            {
+                _header = new RichTextBox
+                {
+                    Dock = DockStyle.Top,
+                    Height = 104,
+                    ReadOnly = true,
+                    BorderStyle = BorderStyle.None,
+                    Font = new Font("Consolas", 9f),
+                    BackColor = Color.FromArgb(250, 250, 250),
+                    WordWrap = false,
+                    ScrollBars = RichTextBoxScrollBars.Vertical,
+                };
+                Controls.Add(_header);
+            }
             Controls.Add(top);
+
+            Controls.Add(_busy);
+            Resize += (_, _) => CenterBusy();
+        }
+
+        private void CenterBusy()
+        {
+            _busy.Left = Math.Max(0, (ClientSize.Width - _busy.Width) / 2);
+            _busy.Top = Math.Max(40, (ClientSize.Height - _busy.Height) / 2);
         }
 
         public void SetStatus(string text) => _status.Text = text;
@@ -167,26 +201,77 @@ namespace BrowseSafe
             _refresh.Enabled = false;
             _status.Text = "Loading …";
 
-            string? summaryText = null;
-            _items = await Task.Run(() =>
+            CenterBusy();
+            _busy.Start();
+            try
             {
-                if (_summary != null) summaryText = SafeSummary();
-                return _loader();
-            });
+                string? summaryText = null;
+                CheckGroup? headerGroup = null;
+                _items = await Task.Run(() =>
+                {
+                    if (_summary != null) summaryText = SafeSummary();
+                    if (_headerInfo != null) { try { headerGroup = _headerInfo(); } catch { /* ignore */ } }
+                    return _loader();
+                });
 
-            SortItems();
-            Populate();
+                if (_header != null && headerGroup != null) RenderHeader(headerGroup);
+                SortItems();
+                Populate();
 
-            string count = $"{_items.Count} item(s)   -   {DateTime.Now:HH:mm:ss}";
-            _status.Text = summaryText != null ? $"{summaryText}      |      {count}" : count;
-            HasRun = true;
-            _refresh.Enabled = true;
-            _loading = false;
+                string count = $"{_items.Count} item(s)   -   {DateTime.Now:HH:mm:ss}";
+                _status.Text = summaryText != null ? $"{summaryText}      |      {count}" : count;
+            }
+            finally
+            {
+                _busy.Stop();
+                HasRun = true;
+                _refresh.Enabled = true;
+                _loading = false;
+            }
         }
 
         private string SafeSummary()
         {
             try { return _summary!(); } catch { return ""; }
+        }
+
+        private void RenderHeader(CheckGroup g)
+        {
+            if (_header == null) return;
+            _header.Clear();
+
+            void Append(string text, Color color, FontStyle style = FontStyle.Regular, float size = 9f)
+            {
+                _header.SelectionStart = _header.TextLength;
+                _header.SelectionColor = color;
+                _header.SelectionFont = new Font("Consolas", size, style);
+                _header.AppendText(text);
+            }
+
+            Append(g.Title + "\n", Color.Black, FontStyle.Bold, 10f);
+            foreach (var r in g.Results)
+            {
+                Color c = r.Status switch
+                {
+                    CheckStatus.Pass => HdrPass,
+                    CheckStatus.Warn => HdrWarn,
+                    CheckStatus.Fail => HdrFail,
+                    _ => HdrInfo,
+                };
+                string tag = r.Status switch
+                {
+                    CheckStatus.Pass => "[PASS] ",
+                    CheckStatus.Warn => "[WARN] ",
+                    CheckStatus.Fail => "[FAIL] ",
+                    _ => "       ",
+                };
+                Append(tag, c, FontStyle.Bold);
+                Append(r.Name, Color.Black, FontStyle.Bold);
+                if (!string.IsNullOrEmpty(r.Detail)) Append("  -  " + r.Detail, HdrInfo);
+                Append("\n", Color.Black);
+            }
+            _header.SelectionStart = 0;
+            _header.ScrollToCaret();
         }
 
         private void Populate()

@@ -82,7 +82,7 @@ namespace BrowseSafe
                 var st = x.Unsupported ? CheckStatus.Warn : CheckStatus.Info;
                 string flags = (x.Enabled ? "" : "disabled, ") + (x.Unsupported ? "MV unsupported, " : "");
                 group.Add(st, x.Name,
-                    $"v{x.Version}  MV{x.ManifestVersion?.ToString() ?? "?"}  [{x.ProfileName}]  {flags}id={x.Id}");
+                    $"v{x.Version}  mod {x.ModifiedText}  MV{x.ManifestVersion?.ToString() ?? "?"}  [{x.ProfileName}]  {flags}id={x.Id}");
             }
             if (exts.Count > MaxList)
                 group.Add(CheckStatus.Info, "...", $"{exts.Count - MaxList} more not shown.");
@@ -138,6 +138,9 @@ namespace BrowseSafe
                         var (name, version, desc, mv) = ParseManifest(Path.Combine(verDir, "manifest.json"), id);
                         bool enabled = !settings.TryGetValue(id, out int state) || state == 1;
 
+                        DateTime? modified = null;
+                        try { modified = Directory.GetLastWriteTime(verDir); } catch { /* ignore */ }
+
                         list.Add(new ChromeExtension
                         {
                             ProfileDir = profile,
@@ -149,6 +152,10 @@ namespace BrowseSafe
                             ManifestVersion = mv,
                             Enabled = enabled,
                             Unsupported = minMv != null && mv != null && mv < minMv,
+                            Modified = modified,
+                            ModifiedText = modified?.ToString("yyyy-MM-dd") ?? "—",
+                            ModifiedSort = modified ?? DateTime.MinValue,
+                            DaysOld = modified != null ? Math.Max(0, (int)(DateTime.Now - modified.Value).TotalDays) : null,
                         });
                     }
                 }

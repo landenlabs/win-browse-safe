@@ -1,3 +1,5 @@
+using System;
+
 namespace BrowseSafe
 {
     /// <summary>One row of the Chrome Extensions tab.</summary>
@@ -12,5 +14,11 @@ namespace BrowseSafe
         public int? ManifestVersion;      // 2 or 3, null if unknown
         public bool Enabled = true;
         public bool Unsupported;          // manifest_version below this Chrome's minimum
+
+        /// <summary>Last-write time of the extension's installed version folder on disk.</summary>
+        public DateTime? Modified;
+        public string ModifiedText = "—";
+        public DateTime ModifiedSort;     // MinValue when unknown
+        public int? DaysOld;              // days since Modified, for recency colouring
     }
 }

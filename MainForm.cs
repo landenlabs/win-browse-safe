@@ -18,6 +18,8 @@ namespace BrowseSafe
         private readonly Button _toggleButton;
         private readonly Button _chromeButton;
         private readonly Button _emailButton;
+        private readonly Button _emailMenuButton;
+        private readonly AppSettings _settings = AppSettings.Load();
         private readonly Panel _leftPanel;
         private readonly TabControl _tabs;
         private readonly ResultsView _scanView;
@@ -84,19 +86,30 @@ namespace BrowseSafe
 
             _emailButton = new Button
             {
-                Text = "Email report  ▾",
-                Width = 130,
+                Text = "Email this tab",
+                Width = 116,
                 Height = 28,
                 Left = 274,
                 Top = 7,
                 FlatStyle = FlatStyle.System,
             };
-            _emailButton.Click += (_, _) => ShowEmailMenu();
+            _emailButton.Click += (_, _) => EmailCurrentTab();
+
+            _emailMenuButton = new Button
+            {
+                Text = "▾",
+                Width = 26,
+                Height = 28,
+                Left = 390,
+                Top = 7,
+                FlatStyle = FlatStyle.System,
+            };
+            _emailMenuButton.Click += (_, _) => ShowEmailMenu();
 
             var toolHint = new Label
             {
                 AutoSize = true,
-                Left = 416,
+                Left = 426,
                 Top = 13,
                 ForeColor = Color.Gray,
                 Text = "Left panel opens Windows Security pages.",
@@ -104,6 +117,7 @@ namespace BrowseSafe
             toolbar.Controls.Add(_toggleButton);
             toolbar.Controls.Add(_chromeButton);
             toolbar.Controls.Add(_emailButton);
+            toolbar.Controls.Add(_emailMenuButton);
             toolbar.Controls.Add(toolHint);
 
             // -- Left panel: Windows Security shortcuts --
@@ -257,61 +271,47 @@ namespace BrowseSafe
             _toggleButton.Text = _leftPanel.Visible ? "◀ Hide tools" : "▶ Show tools";
         }
 
+        /// <summary>Emails the report for the currently active tab using the stored client.</summary>
+        private void EmailCurrentTab()
+        {
+            string scope = _tabs.SelectedTab?.Tag as string ?? "scan";
+            string tabName = _tabs.SelectedTab?.Text ?? scope;
+            ReportMailer.Send(this, scope, tabName, _settings);
+        }
+
+        /// <summary>Drop-down to choose (and persist) the email client and browser.</summary>
         private void ShowEmailMenu()
         {
             var menu = new ContextMenuStrip();
-            string current = _tabs.SelectedTab?.Tag as string ?? "scan";
-            string tabName = _tabs.SelectedTab?.Text ?? current;
-            menu.Items.Add($"Current tab ({tabName})", null, (_, _) => EmailReport(current));
-            menu.Items.Add("All tabs", null, (_, _) => EmailReport("all"));
-            menu.Show(_emailButton, new Point(0, _emailButton.Height));
-        }
 
-        /// <summary>
-        /// Builds the report for the scope, saves it to a file, copies it to the
-        /// clipboard, and opens the default mail client (mailto). mailto bodies are
-        /// length-limited, so long reports are truncated in the body - the full text
-        /// is in the saved file and on the clipboard.
-        /// </summary>
-        private void EmailReport(string scope)
-        {
-            string text;
-            try { (text, _) = Reports.Build(scope); }
-            catch (Exception ex)
+            menu.Items.Add("Email this tab now", null, (_, _) => EmailCurrentTab());
+            menu.Items.Add(new ToolStripSeparator());
+
+            var client = new ToolStripMenuItem("Email client");
+            foreach (var (m, label) in new[]
             {
-                MessageBox.Show(this, "Could not build report: " + ex.Message, "Email report",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-            string file = Path.Combine(Path.GetTempPath(), $"browse-safe-{scope}-{stamp}.txt");
-            string? savedTo = null;
-            try { File.WriteAllText(file, text); savedTo = file; } catch { /* non-fatal */ }
-
-            try { Clipboard.SetText(text); } catch { /* clipboard may be locked */ }
-
-            string subject = $"Browse Safe report ({scope}) {DateTime.Now:yyyy-MM-dd HH:mm}";
-            const int maxBody = 1800; // keep the whole mailto URI under shell limits
-            string body = text.Length <= maxBody
-                ? text
-                : text.Substring(0, maxBody) +
-                  "\r\n\r\n...[truncated for email]\r\n" +
-                  (savedTo != null ? $"Full report saved to: {savedTo}\r\n" : "") +
-                  "The full report has also been copied to your clipboard - paste to include it.";
-
-            string uri = $"mailto:?subject={Uri.EscapeDataString(subject)}&body={Uri.EscapeDataString(body)}";
-            try
+                (EmailMethod.DefaultMailApp, "Default mail app"),
+                (EmailMethod.Gmail, "Gmail (web)"),
+                (EmailMethod.OutlookWeb, "Outlook (web)"),
+            })
             {
-                Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+                var item = new ToolStripMenuItem(label) { Checked = _settings.EmailMethod == m };
+                item.Click += (_, _) => { _settings.EmailMethod = m; _settings.Save(); };
+                client.DropDownItems.Add(item);
             }
-            catch (Exception ex)
+            menu.Items.Add(client);
+
+            var browser = new ToolStripMenuItem("Open web mail in");
+            foreach (BrowserChoice b in Enum.GetValues<BrowserChoice>())
             {
-                MessageBox.Show(this,
-                    "Could not open the mail client: " + ex.Message +
-                    (savedTo != null ? $"\n\nThe report was saved to:\n{savedTo}" : ""),
-                    "Email report", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                string label = b == BrowserChoice.Default ? "Default browser" : b.ToString();
+                var item = new ToolStripMenuItem(label) { Checked = _settings.EmailBrowser == b };
+                item.Click += (_, _) => { _settings.EmailBrowser = b; _settings.Save(); };
+                browser.DropDownItems.Add(item);
             }
+            menu.Items.Add(browser);
+
+            menu.Show(_emailMenuButton, new Point(0, _emailMenuButton.Height));
         }
 
         private void OpenUri(string uri)

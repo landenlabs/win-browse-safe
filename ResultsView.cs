@@ -25,6 +25,7 @@ namespace BrowseSafe
         private readonly Button _runButton;
         private readonly Label _status;
         private readonly RichTextBox _output;
+        private readonly BusyOverlay _busy = new();
         private readonly IReadOnlyList<(string Label, Func<CheckGroup> Run)> _steps;
         private readonly bool _reportVerdict;
         private bool _running;
@@ -94,6 +95,15 @@ namespace BrowseSafe
 
             Controls.Add(_output);
             Controls.Add(top);
+
+            Controls.Add(_busy);
+            Resize += (_, _) => CenterBusy();
+        }
+
+        private void CenterBusy()
+        {
+            _busy.Left = Math.Max(0, (ClientSize.Width - _busy.Width) / 2);
+            _busy.Top = Math.Max(40, (ClientSize.Height - _busy.Height) / 2);
         }
 
         public async Task RunAsync()
@@ -106,20 +116,28 @@ namespace BrowseSafe
             AppendLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss}", ColorInfo, FontStyle.Italic);
             AppendLine("");
 
+            CenterBusy();
+            _busy.Start();
             CheckStatus overall = CheckStatus.Pass;
-            foreach (var (label, run) in _steps)
+            try
             {
-                _status.Text = $"Running {label} ...";
-                CheckGroup g = await Task.Run(run);
-                RenderGroup(g);
-                if (CheckGroup.Rank(g.Worst()) > CheckGroup.Rank(overall))
-                    overall = g.Worst();
+                foreach (var (label, run) in _steps)
+                {
+                    _status.Text = $"Running {label} ...";
+                    CheckGroup g = await Task.Run(run);
+                    RenderGroup(g);
+                    if (CheckGroup.Rank(g.Worst()) > CheckGroup.Rank(overall))
+                        overall = g.Worst();
+                }
+                _status.Text = $"Completed {DateTime.Now:HH:mm:ss}";
             }
-
-            _status.Text = $"Completed {DateTime.Now:HH:mm:ss}";
-            HasRun = true;
-            _runButton.Enabled = true;
-            _running = false;
+            finally
+            {
+                _busy.Stop();
+                HasRun = true;
+                _runButton.Enabled = true;
+                _running = false;
+            }
             if (_reportVerdict) Completed?.Invoke(overall);
         }
 

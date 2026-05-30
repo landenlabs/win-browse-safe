@@ -87,10 +87,10 @@ namespace BrowseSafe
                     Text = o => ((ChromeExtension)o).Unsupported ? "Unsupported" : "OK",
                     Sort = o => ((ChromeExtension)o).Unsupported ? 1 : 0,
                     Style = o => ((ChromeExtension)o).Unsupported ? ((Color, Color)?)(RedBack, RedFore) : null },
-                new GridColumn { Header = "Enabled", Width = 64,
-                    Text = o => ((ChromeExtension)o).Enabled ? "Yes" : "No",
-                    Sort = o => ((ChromeExtension)o).Enabled ? 1 : 0,
-                    Style = o => ((ChromeExtension)o).Enabled ? null : ((Color, Color)?)(YelBack, YelFore) },
+                new GridColumn { Header = "Modified", Width = 92,
+                    Text = o => ((ChromeExtension)o).ModifiedText,
+                    Sort = o => ((ChromeExtension)o).ModifiedSort,
+                    Style = o => RecencyStyle(((ChromeExtension)o).DaysOld) },
                 new GridColumn { Header = "Profile", Width = 110, Text = o => ((ChromeExtension)o).ProfileName },
                 new GridColumn { Header = "Extension name", Fill = 130, Text = o => ((ChromeExtension)o).Name },
                 new GridColumn { Header = "Version", Width = 90,
@@ -102,10 +102,10 @@ namespace BrowseSafe
                 new GridColumn { Header = "Description", Fill = 120, Text = o => ((ChromeExtension)o).Description },
             };
             return new SortableGrid("Refresh",
-                () => SafetyChecks.GetChromeExtensions().Cast<object>().ToList(),
+                () => SafetyChecks.GetChromeExtensions().Where(e => e.Enabled).Cast<object>().ToList(),
                 cols, defaultSortColumn: 2, defaultAscending: true,
-                legend: "MV2 = unsupported on Chrome 138+",
-                summary: ChromeIntegritySummary);
+                legend: "Enabled extensions only.  MV2 = unsupported on Chrome 138+",
+                headerInfo: SafetyChecks.CheckChromeExe);
         }
 
         // ---- Shared helpers ---------------------------------------------- //
@@ -128,21 +128,6 @@ namespace BrowseSafe
             if (Version.TryParse(v, out var ver))
                 return $"{ver.Major:D7}.{Math.Max(ver.Minor, 0):D7}.{Math.Max(ver.Build, 0):D7}.{Math.Max(ver.Revision, 0):D7}";
             return "Z" + v; // unparseable sorts after numeric versions, consistently as string
-        }
-
-        private static string ChromeIntegritySummary()
-        {
-            var g = SafetyChecks.CheckChromeExe();
-            string ver = "", sig = "", sha = "";
-            foreach (var r in g.Results)
-            {
-                if (r.Name == "Version") ver = r.Detail;
-                else if (r.Name == "Digital signature") sig = r.Detail;
-                else if (r.Name == "SHA-256") sha = r.Detail;
-            }
-            if (ver.Length == 0 && sha.Length == 0) return "Chrome executable not found";
-            string shaShort = sha.Length >= 12 ? sha.Substring(0, 12) + "…" : sha;
-            return $"chrome.exe v{ver}  ·  Signature: {sig}  ·  SHA-256 {shaShort}";
         }
 
         // ---- Installed scan actions -------------------------------------- //
