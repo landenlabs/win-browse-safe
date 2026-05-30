@@ -42,6 +42,8 @@ namespace BrowseSafe
             }
 
             ApplicationConfiguration.Initialize();
+            Theme.Load();
+            Theme.Apply(Theme.Current); // apply saved light/dark mode before any window is shown
             Application.Run(new MainForm());
         }
 

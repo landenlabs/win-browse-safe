@@ -13,6 +13,14 @@
     <Company>LanDen Labs</Company>
     <Product>Browse Safe</Product>
     <Description>Verifies the network and OS are in a safe state before running the Chrome browser.</Description>
+    <!-- Application.SetColorMode / SystemColorMode are still experimental (WFO5001). -->
+    <NoWarn>$(NoWarn);WFO5001</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="dark-light.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 
 </Project>

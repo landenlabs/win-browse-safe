@@ -44,11 +44,14 @@ namespace BrowseSafe
         public TabSeverity Severity { get; private set; } = TabSeverity.None;
         public event Action? SeverityChanged;
 
-        private static readonly Color HdrPass = Color.FromArgb(0, 140, 0);
-        private static readonly Color HdrWarn = Color.FromArgb(190, 120, 0);
-        private static readonly Color HdrFail = Color.FromArgb(200, 0, 0);
-        private static readonly Color HdrInfo = Color.FromArgb(70, 70, 70);
+        private static Color HdrPass => Theme.IsDark ? Color.FromArgb(90, 200, 100) : Color.FromArgb(0, 140, 0);
+        private static Color HdrWarn => Theme.IsDark ? Color.FromArgb(232, 184, 64) : Color.FromArgb(190, 120, 0);
+        private static Color HdrFail => Theme.IsDark ? Color.FromArgb(240, 110, 110) : Color.FromArgb(200, 0, 0);
+        private static Color HdrInfo => Theme.Subtle;
 
+        private Panel? _topPanel;
+        private Panel? _headerPanel;
+        private CheckGroup? _lastHeader;
         private List<object> _items = new();
         private int _sortCol;
         private bool _asc;
@@ -84,16 +87,21 @@ namespace BrowseSafe
             _asc = defaultAscending;
 
             Dock = DockStyle.Fill;
-            BackColor = Color.White;
+            BackColor = Theme.Surface;
 
-            var top = new Panel { Dock = DockStyle.Top, Height = 40, BackColor = Color.FromArgb(245, 245, 245) };
+            var top = new Panel { Dock = DockStyle.Top, Height = 40, BackColor = Theme.Toolbar };
+            _topPanel = top;
 
             int x = 8;
             if (showAllToggle is { } st)
             {
                 _hideWhenOff = st.HideWhenOff;
                 int w = TextRenderer.MeasureText(st.Label, Font).Width + 26;
-                _toggle = new CheckBox { Text = st.Label, Left = x, Top = 9, Width = w, Height = 24, Checked = false };
+                _toggle = new CheckBox
+                {
+                    Text = st.Label, Left = x, Top = 9, Width = w, Height = 24, Checked = false,
+                    ForeColor = Theme.Text, BackColor = Color.Transparent,
+                };
                 _toggle.CheckedChanged += (_, _) => Populate();
                 top.Controls.Add(_toggle);
                 x += w + 8;
@@ -126,14 +134,14 @@ namespace BrowseSafe
 
             _status = new Label
             {
-                AutoSize = true, Left = x + 4, Top = 12, ForeColor = Color.Gray,
+                AutoSize = true, Left = x + 4, Top = 12, ForeColor = Theme.Subtle,
                 Text = "Click " + runLabel + ".",
             };
             top.Controls.Add(_status);
 
             if (legend != null)
             {
-                var lg = new Label { AutoSize = true, Top = 12, Left = 0, ForeColor = Color.Gray, Text = legend };
+                var lg = new Label { AutoSize = true, Top = 12, Left = 0, ForeColor = Theme.Subtle, Text = legend };
                 lg.Dock = DockStyle.Right;
                 lg.TextAlign = ContentAlignment.MiddleRight;
                 lg.Padding = new Padding(0, 12, 10, 0);
@@ -152,11 +160,19 @@ namespace BrowseSafe
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 MultiSelect = false,
                 AutoGenerateColumns = false,
-                BackgroundColor = Color.White,
+                BackgroundColor = Theme.Surface,
                 BorderStyle = BorderStyle.None,
                 ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+                EnableHeadersVisualStyles = false,
+                GridColor = Theme.GridLine,
                 Font = new Font("Segoe UI", 9f),
             };
+            _grid.DefaultCellStyle.BackColor = Theme.Surface;
+            _grid.DefaultCellStyle.ForeColor = Theme.Text;
+            _grid.DefaultCellStyle.SelectionBackColor = Theme.IsDark ? Color.FromArgb(70, 80, 100) : Color.FromArgb(200, 220, 245);
+            _grid.DefaultCellStyle.SelectionForeColor = Theme.Text;
+            _grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.Toolbar;
+            _grid.ColumnHeadersDefaultCellStyle.ForeColor = Theme.Text;
 
             for (int i = 0; i < _cols.Length; i++)
             {
@@ -193,17 +209,19 @@ namespace BrowseSafe
             Controls.Add(_grid);
             if (_headerInfo != null)
             {
-                var headerPanel = new Panel { Dock = DockStyle.Top, Height = 104, BackColor = Color.FromArgb(250, 250, 250) };
+                _headerPanel = new Panel { Dock = DockStyle.Top, Height = 104, BackColor = Theme.Surface };
                 _header = new RichTextBox
                 {
                     Dock = DockStyle.Fill,
                     ReadOnly = true,
                     BorderStyle = BorderStyle.None,
                     Font = new Font("Consolas", 9f),
-                    BackColor = Color.FromArgb(250, 250, 250),
+                    BackColor = Theme.Surface,
+                    ForeColor = Theme.Text,
                     WordWrap = false,
                     ScrollBars = RichTextBoxScrollBars.Vertical,
                 };
+                var headerPanel = _headerPanel;
                 headerPanel.Controls.Add(_header);
                 if (headerButton is { } hb)
                 {
@@ -224,6 +242,43 @@ namespace BrowseSafe
 
             Controls.Add(_busy);
             Resize += (_, _) => CenterBusy();
+
+            Theme.Changed += OnThemeChanged;
+            Disposed += (_, _) => Theme.Changed -= OnThemeChanged;
+        }
+
+        private void OnThemeChanged()
+        {
+            if (!IsHandleCreated) { ApplyTheme(); return; }
+            BeginInvoke(new Action(ApplyTheme));
+        }
+
+        private void ApplyTheme()
+        {
+            BackColor = Theme.Surface;
+            if (_topPanel != null) _topPanel.BackColor = Theme.Toolbar;
+            foreach (Control c in (_topPanel?.Controls ?? (ControlCollection)Controls))
+                if (c is Label || c is CheckBox) c.ForeColor = Theme.Subtle;
+            if (_toggle != null) _toggle.ForeColor = Theme.Text;
+
+            _grid.BackgroundColor = Theme.Surface;
+            _grid.GridColor = Theme.GridLine;
+            _grid.DefaultCellStyle.BackColor = Theme.Surface;
+            _grid.DefaultCellStyle.ForeColor = Theme.Text;
+            _grid.DefaultCellStyle.SelectionBackColor = Theme.IsDark ? Color.FromArgb(70, 80, 100) : Color.FromArgb(200, 220, 245);
+            _grid.DefaultCellStyle.SelectionForeColor = Theme.Text;
+            _grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.Toolbar;
+            _grid.ColumnHeadersDefaultCellStyle.ForeColor = Theme.Text;
+
+            if (_headerPanel != null) _headerPanel.BackColor = Theme.Surface;
+            if (_header != null)
+            {
+                _header.BackColor = Theme.Surface;
+                _header.ForeColor = Theme.Text;
+            }
+
+            if (_items.Count > 0) Populate();          // re-apply default cell colours
+            if (_lastHeader != null) RenderHeader(_lastHeader);
         }
 
         private void CenterBusy()
@@ -254,6 +309,7 @@ namespace BrowseSafe
                     return _loader();
                 });
 
+                _lastHeader = headerGroup;
                 if (_header != null && headerGroup != null) RenderHeader(headerGroup);
                 SortItems();
                 Populate();
@@ -290,7 +346,7 @@ namespace BrowseSafe
                 _header.AppendText(text);
             }
 
-            Append(g.Title + "\n", Color.Black, FontStyle.Bold, 10f);
+            Append(g.Title + "\n", Theme.Text, FontStyle.Bold, 10f);
             foreach (var r in g.Results)
             {
                 Color c = r.Status switch
@@ -308,9 +364,9 @@ namespace BrowseSafe
                     _ => "       ",
                 };
                 Append(tag, c, FontStyle.Bold);
-                Append(r.Name, Color.Black, FontStyle.Bold);
+                Append(r.Name, Theme.Text, FontStyle.Bold);
                 if (!string.IsNullOrEmpty(r.Detail)) Append("  -  " + r.Detail, HdrInfo);
-                Append("\n", Color.Black);
+                Append("\n", Theme.Text);
             }
             _header.SelectionStart = 0;
             _header.ScrollToCaret();

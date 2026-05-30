@@ -31,6 +31,7 @@ namespace BrowseSafe
         private readonly Button _runButton;
         private readonly Label _status;
         private readonly RichTextBox _output;
+        private readonly Panel _topPanel;
         private readonly BusyOverlay _busy = new();
         private readonly IReadOnlyList<(string Label, Func<CheckGroup> Run)> _steps;
         private readonly bool _reportVerdict;
@@ -49,11 +50,15 @@ namespace BrowseSafe
         /// <summary>Raised with the overall verdict after a run (only when reportVerdict is set).</summary>
         public event Action<CheckStatus>? Completed;
 
-        private static readonly Color ColorPass = Color.FromArgb(0, 140, 0);
-        private static readonly Color ColorWarn = Color.FromArgb(190, 120, 0);
-        private static readonly Color ColorFail = Color.FromArgb(200, 0, 0);
-        private static readonly Color ColorInfo = Color.FromArgb(70, 70, 70);
-        private static readonly Color ColorLink = Color.FromArgb(0, 102, 204);
+        // Theme-aware colours (brighter status hues on dark backgrounds).
+        private static Color ColorPass => Theme.IsDark ? Color.FromArgb(90, 200, 100) : Color.FromArgb(0, 140, 0);
+        private static Color ColorWarn => Theme.IsDark ? Color.FromArgb(232, 184, 64) : Color.FromArgb(190, 120, 0);
+        private static Color ColorFail => Theme.IsDark ? Color.FromArgb(240, 110, 110) : Color.FromArgb(200, 0, 0);
+        private static Color ColorInfo => Theme.Subtle;
+        private static Color ColorText => Theme.Text;
+        private static Color ColorLink => Theme.IsDark ? Color.FromArgb(96, 162, 250) : Color.FromArgb(0, 102, 204);
+
+        private List<CheckGroup> _lastGroups = new();
 
         public ResultsView(string runLabel, string intro,
             IReadOnlyList<(string Label, Func<CheckGroup> Run)> steps, bool reportVerdict)
@@ -61,9 +66,9 @@ namespace BrowseSafe
             _steps = steps;
             _reportVerdict = reportVerdict;
             Dock = DockStyle.Fill;
-            BackColor = Color.White;
+            BackColor = Theme.Surface;
 
-            var top = new Panel { Dock = DockStyle.Top, Height = 40 };
+            var top = new Panel { Dock = DockStyle.Top, Height = 40, BackColor = Theme.Toolbar };
             _runButton = new Button
             {
                 Text = runLabel,
@@ -81,7 +86,7 @@ namespace BrowseSafe
                 AutoSize = true,
                 Left = 178,
                 Top = 12,
-                ForeColor = Color.Gray,
+                ForeColor = Theme.Subtle,
                 Text = intro,
             };
             top.Controls.Add(_runButton);
@@ -93,12 +98,14 @@ namespace BrowseSafe
                 ReadOnly = true,
                 BorderStyle = BorderStyle.None,
                 Font = new Font("Consolas", 9.5f),
-                BackColor = Color.White,
+                BackColor = Theme.Surface,
+                ForeColor = Theme.Text,
                 DetectUrls = false,
                 WordWrap = false,
                 ScrollBars = RichTextBoxScrollBars.Both,
                 Cursor = Cursors.IBeam,
             };
+            _topPanel = top;
             _output.MouseDown += Output_MouseDown;
             _output.MouseMove += Output_MouseMove;
 
@@ -107,6 +114,32 @@ namespace BrowseSafe
 
             Controls.Add(_busy);
             Resize += (_, _) => CenterBusy();
+
+            Theme.Changed += OnThemeChanged;
+            Disposed += (_, _) => Theme.Changed -= OnThemeChanged;
+        }
+
+        private void OnThemeChanged()
+        {
+            if (!IsHandleCreated) { ApplyTheme(); return; }
+            BeginInvoke(new Action(ApplyTheme));
+        }
+
+        private void ApplyTheme()
+        {
+            BackColor = Theme.Surface;
+            _topPanel.BackColor = Theme.Toolbar;
+            _status.ForeColor = Theme.Subtle;
+            _output.BackColor = Theme.Surface;
+            _output.ForeColor = Theme.Text;
+            if (HasRun) ReRender();   // recolour existing content (e.g. black text -> light)
+        }
+
+        private void ReRender()
+        {
+            _output.Clear();
+            _hostsLinkStart = _hostsLinkEnd = -1;
+            foreach (var g in _lastGroups) RenderGroup(g);
         }
 
         private void CenterBusy()
@@ -121,6 +154,7 @@ namespace BrowseSafe
             _running = true;
             _runButton.Enabled = false;
             _output.Clear();
+            _lastGroups = new List<CheckGroup>();
             _hostsLinkStart = _hostsLinkEnd = -1;
             AppendLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss}", ColorInfo, FontStyle.Italic);
             AppendLine("");
@@ -134,6 +168,7 @@ namespace BrowseSafe
                 {
                     _status.Text = $"Running {label} ...";
                     CheckGroup g = await Task.Run(run);
+                    _lastGroups.Add(g);
                     RenderGroup(g);
                     if (CheckGroup.Rank(g.Worst()) > CheckGroup.Rank(overall))
                         overall = g.Worst();
@@ -157,7 +192,7 @@ namespace BrowseSafe
             // The hosts section title carries an inline clickable "Open hosts folder" link.
             if (group.Title.Contains("Hosts File", StringComparison.OrdinalIgnoreCase))
             {
-                Append(group.Title, Color.Black, FontStyle.Bold, 11f);
+                Append(group.Title, ColorText, FontStyle.Bold, 11f);
                 Append("      ", ColorInfo);
                 _hostsLinkStart = _output.TextLength;
                 Append("[ Open hosts folder ]", ColorLink, FontStyle.Underline, 9.5f);
@@ -166,7 +201,7 @@ namespace BrowseSafe
             }
             else
             {
-                AppendLine(group.Title, Color.Black, FontStyle.Bold, 11f);
+                AppendLine(group.Title, ColorText, FontStyle.Bold, 11f);
             }
             AppendLine(new string('─', 60), ColorInfo);
 
@@ -186,7 +221,7 @@ namespace BrowseSafe
                     _ => "[ INFO ]",
                 };
                 Append(tag + "  ", ColorFor(r.Status), FontStyle.Bold);
-                Append(r.Name, Color.Black, FontStyle.Bold);
+                Append(r.Name, ColorText, FontStyle.Bold);
                 if (!string.IsNullOrEmpty(r.Detail))
                     Append("  -  " + r.Detail, ColorInfo);
                 AppendLine("");

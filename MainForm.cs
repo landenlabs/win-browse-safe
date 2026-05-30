@@ -18,11 +18,14 @@ namespace BrowseSafe
         private readonly Button _toggleButton;
         private readonly Button _chromeButton;
         private readonly Button _emailButton;
-        private readonly Button _emailMenuButton;
-        private readonly AppSettings _settings = AppSettings.Load();
         private readonly Panel _leftPanel;
         private readonly TabControl _tabs;
         private readonly ResultsView _scanView;
+        private readonly BusyOverlay _emailBusy = new();
+        private Panel _toolbar = null!;
+        private Label _toolHint = null!;
+        private Label _leftHeader = null!;
+        private Panel _leftBottom = null!;
 
         // Windows Security deep-link pages (windowsdefender: protocol).
         private static readonly (string Label, string Uri)[] SecurityShortcuts =
@@ -42,7 +45,7 @@ namespace BrowseSafe
             Size = new Size(1000, 740);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9f);
-            BackColor = Color.White;
+            BackColor = Theme.Window;
 
             _banner = new Label
             {
@@ -50,13 +53,14 @@ namespace BrowseSafe
                 Height = 50,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font("Segoe UI", 13f, FontStyle.Bold),
-                ForeColor = Color.White,
+                ForeColor = Theme.Text,
                 BackColor = Color.FromArgb(90, 90, 90),
                 Text = "Run the Safety Scan to evaluate browsing safety",
             };
 
             // -- Toolbar --
-            var toolbar = new Panel { Dock = DockStyle.Top, Height = 42, BackColor = Color.FromArgb(245, 245, 245) };
+            _toolbar = new Panel { Dock = DockStyle.Top, Height = 42, BackColor = Theme.Toolbar };
+            var toolbar = _toolbar;
             _toggleButton = new Button
             {
                 Text = "◀ Hide tools",
@@ -82,8 +86,8 @@ namespace BrowseSafe
 
             _emailButton = new Button
             {
-                Text = "Email this tab",
-                Width = 116,
+                Text = "Email this tab (Chrome)",
+                Width = 170,
                 Height = 28,
                 Left = 274,
                 Top = 7,
@@ -91,42 +95,32 @@ namespace BrowseSafe
             };
             _emailButton.Click += (_, _) => EmailCurrentTab();
 
-            _emailMenuButton = new Button
-            {
-                Text = "▾",
-                Width = 26,
-                Height = 28,
-                Left = 390,
-                Top = 7,
-                FlatStyle = FlatStyle.System,
-            };
-            _emailMenuButton.Click += (_, _) => ShowEmailMenu();
-
-            var toolHint = new Label
+            _toolHint = new Label
             {
                 AutoSize = true,
-                Left = 426,
+                Left = 456,
                 Top = 13,
-                ForeColor = Color.Gray,
+                ForeColor = Theme.Subtle,
                 Text = "Left panel opens Windows Security pages.",
             };
+            var toolHint = _toolHint;
             toolbar.Controls.Add(_toggleButton);
             toolbar.Controls.Add(_chromeButton);
             toolbar.Controls.Add(_emailButton);
-            toolbar.Controls.Add(_emailMenuButton);
             toolbar.Controls.Add(toolHint);
 
             // -- Left panel: Windows Security shortcuts --
-            _leftPanel = new Panel { Dock = DockStyle.Left, Width = 230, BackColor = Color.FromArgb(238, 240, 243) };
-            var leftHeader = new Label
+            _leftPanel = new Panel { Dock = DockStyle.Left, Width = 230, BackColor = Theme.Panel };
+            _leftHeader = new Label
             {
                 Dock = DockStyle.Top,
                 Height = 34,
                 Text = "  Windows Security",
                 TextAlign = ContentAlignment.MiddleLeft,
                 Font = new Font("Segoe UI", 10f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(40, 40, 40),
+                ForeColor = Theme.Text,
             };
+            var leftHeader = _leftHeader;
             var flow = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -155,13 +149,42 @@ namespace BrowseSafe
                 AutoSize = false,
                 Width = 200,
                 Height = 60,
-                ForeColor = Color.Gray,
+                ForeColor = Theme.Subtle,
                 Font = new Font("Segoe UI", 8f),
                 Text = "Opens the Windows Security app to the chosen page.",
                 Margin = new Padding(0, 8, 0, 0),
             };
             flow.Controls.Add(leftNote);
+
+            // Theme toggle pinned to the lower-left of the panel.
+            _leftBottom = new Panel { Dock = DockStyle.Bottom, Height = 52, BackColor = Theme.Panel };
+            var themeIcon = new PictureBox
+            {
+                Left = 10, Top = 8, Width = 40, Height = 40,
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.Transparent,
+                Cursor = Cursors.Hand,
+            };
+            try { themeIcon.Image = Image.FromFile(System.IO.Path.Combine(AppContext.BaseDirectory, "dark-light.png")); }
+            catch { /* icon missing - label still works */ }
+            themeIcon.Click += (_, _) => ToggleTheme();
+
+            var themeLabel = new Label
+            {
+                Left = 58, Top = 18, AutoSize = true, ForeColor = Theme.Subtle,
+                Text = "Theme", Cursor = Cursors.Hand,
+            };
+            themeLabel.Click += (_, _) => ToggleTheme();
+
+            var tip = new ToolTip();
+            tip.SetToolTip(themeIcon, "Toggle dark / light theme");
+            tip.SetToolTip(themeLabel, "Toggle dark / light theme");
+
+            _leftBottom.Controls.Add(themeIcon);
+            _leftBottom.Controls.Add(themeLabel);
+
             _leftPanel.Controls.Add(flow);
+            _leftPanel.Controls.Add(_leftBottom);
             _leftPanel.Controls.Add(leftHeader);
 
             // -- Tabs (owner-drawn so they can be colour-coded by worst state) --
@@ -192,8 +215,28 @@ namespace BrowseSafe
             Controls.Add(_leftPanel);
             Controls.Add(toolbar);
             Controls.Add(_banner);
+            Controls.Add(_emailBusy);   // floating spinner shown while an email report builds
 
             UpdateBanner(); // initial title for the active (Safety Scan) tab
+            ApplyThemeColors(); // paint buttons/chrome for the startup theme
+            Theme.Changed += () => { ApplyThemeColors(); UpdateBanner(); _tabs.Invalidate(); };
+        }
+
+        /// <summary>Re-colours the form chrome (left panel, toolbar, all buttons) for the current theme.</summary>
+        private void ApplyThemeColors()
+        {
+            BackColor = Theme.Window;
+            _toolbar.BackColor = Theme.Toolbar;
+            _toolHint.ForeColor = Theme.Subtle;
+
+            _leftPanel.BackColor = Theme.Panel;
+            _leftBottom.BackColor = Theme.Panel;
+            _leftHeader.ForeColor = Theme.Text;
+            foreach (Control c in _leftBottom.Controls)
+                if (c is Label) c.ForeColor = Theme.Subtle;
+
+            // Explicitly paint every button (toolbar, left panel, and inside each tab view).
+            Theme.StyleButtons(this);
         }
 
         /// <summary>The full safety scan, as labelled steps rendered incrementally.</summary>
@@ -244,11 +287,13 @@ namespace BrowseSafe
                 ? v.Severity : TabSeverity.None;
 
             Color back = SeverityColor(sev, selected);
+            // Severity colours are light, so use dark text on them; neutral tabs follow the theme.
+            Color fore = sev == TabSeverity.None ? Theme.Text : Color.FromArgb(30, 30, 30);
             var r = e.Bounds;
             using (var b = new SolidBrush(back)) e.Graphics.FillRectangle(b, r);
-            using (var pen = new Pen(Color.FromArgb(210, 210, 210))) e.Graphics.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height);
+            using (var pen = new Pen(Theme.GridLine)) e.Graphics.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height);
 
-            TextRenderer.DrawText(e.Graphics, page.Text, _tabs.Font, r, Color.Black,
+            TextRenderer.DrawText(e.Graphics, page.Text, _tabs.Font, r, fore,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
 
@@ -284,7 +329,7 @@ namespace BrowseSafe
             TabSeverity.Alert => selected ? Color.FromArgb(250, 170, 170) : Color.FromArgb(252, 214, 214),
             TabSeverity.Caution => selected ? Color.FromArgb(252, 226, 140) : Color.FromArgb(255, 244, 200),
             TabSeverity.Ok => selected ? Color.FromArgb(190, 230, 190) : Color.FromArgb(224, 244, 224),
-            _ => selected ? Color.White : Color.FromArgb(238, 238, 238),
+            _ => Theme.NeutralTab(selected),
         };
 
         /// <summary>Banner shows the active tab's title; its colour matches that tab once it has run.</summary>
@@ -296,8 +341,16 @@ namespace BrowseSafe
             TabSeverity sev = page.Controls.Count > 0 && page.Controls[0] is ITabView v ? v.Severity : TabSeverity.None;
 
             _banner.Text = BannerTitles.TryGetValue(scope, out var title) ? title : page.Text;
-            _banner.BackColor = sev == TabSeverity.None ? Color.FromArgb(210, 214, 219) : SeverityColor(sev, true);
-            _banner.ForeColor = Color.FromArgb(40, 40, 40);
+            if (sev == TabSeverity.None)
+            {
+                _banner.BackColor = Theme.IsDark ? Color.FromArgb(60, 60, 64) : Color.FromArgb(210, 214, 219);
+                _banner.ForeColor = Theme.Text;
+            }
+            else
+            {
+                _banner.BackColor = SeverityColor(sev, true);   // light severity shade
+                _banner.ForeColor = Color.FromArgb(30, 30, 30); // dark text on light shade
+            }
         }
 
         private void OnScanCompleted(CheckStatus overall)
@@ -312,47 +365,40 @@ namespace BrowseSafe
             _toggleButton.Text = _leftPanel.Visible ? "◀ Hide tools" : "▶ Show tools";
         }
 
-        /// <summary>Emails the report for the currently active tab using the stored client.</summary>
-        private void EmailCurrentTab()
+        private void ToggleTheme()
+        {
+            Theme.Toggle();
+            Invalidate(true);  // best-effort live repaint of standard controls
+        }
+
+        /// <summary>
+        /// Emails the active tab's report via Gmail in Chrome. The report is built on a
+        /// background thread (Reports.Build runs the checks), so a spinner is shown and
+        /// the UI stays responsive.
+        /// </summary>
+        private async void EmailCurrentTab()
         {
             string scope = _tabs.SelectedTab?.Tag as string ?? "scan";
             string tabName = _tabs.SelectedTab?.Text ?? scope;
-            ReportMailer.Send(this, scope, tabName, _settings);
+
+            _emailButton.Enabled = false;
+            CenterEmailBusy();
+            _emailBusy.Start();
+            try
+            {
+                await ReportMailer.SendAsync(this, scope, tabName);
+            }
+            finally
+            {
+                _emailBusy.Stop();
+                _emailButton.Enabled = true;
+            }
         }
 
-        /// <summary>Drop-down to choose (and persist) the email client and browser.</summary>
-        private void ShowEmailMenu()
+        private void CenterEmailBusy()
         {
-            var menu = new ContextMenuStrip();
-
-            menu.Items.Add("Email this tab now", null, (_, _) => EmailCurrentTab());
-            menu.Items.Add(new ToolStripSeparator());
-
-            var client = new ToolStripMenuItem("Email client");
-            foreach (var (m, label) in new[]
-            {
-                (EmailMethod.DefaultMailApp, "Default mail app"),
-                (EmailMethod.Gmail, "Gmail (web)"),
-                (EmailMethod.OutlookWeb, "Outlook (web)"),
-            })
-            {
-                var item = new ToolStripMenuItem(label) { Checked = _settings.EmailMethod == m };
-                item.Click += (_, _) => { _settings.EmailMethod = m; _settings.Save(); };
-                client.DropDownItems.Add(item);
-            }
-            menu.Items.Add(client);
-
-            var browser = new ToolStripMenuItem("Open web mail in");
-            foreach (BrowserChoice b in Enum.GetValues<BrowserChoice>())
-            {
-                string label = b == BrowserChoice.Default ? "Default browser" : b.ToString();
-                var item = new ToolStripMenuItem(label) { Checked = _settings.EmailBrowser == b };
-                item.Click += (_, _) => { _settings.EmailBrowser = b; _settings.Save(); };
-                browser.DropDownItems.Add(item);
-            }
-            menu.Items.Add(browser);
-
-            menu.Show(_emailMenuButton, new Point(0, _emailMenuButton.Height));
+            _emailBusy.Left = Math.Max(0, (ClientSize.Width - _emailBusy.Width) / 2);
+            _emailBusy.Top = Math.Max(0, (ClientSize.Height - _emailBusy.Height) / 2);
         }
 
         private void OpenUri(string uri)
