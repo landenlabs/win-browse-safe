@@ -42,7 +42,21 @@ namespace BrowseSafe
 
         public MainForm()
         {
-            Text = "Browse Safe - Chrome Safety Check";
+            // Version and build date come from AppInfo, which set-version.ps1 keeps in sync.
+            Text = $"Browse Safe - Chrome Safety Check - {AppInfo.Version} - LanDen Labs  {AppInfo.BuildDate}";
+            // Window/taskbar icon. Loaded from the embedded multi-resolution icon.ico so it
+            // works inside the single-file exe; ExtractAssociatedIcon is only a last resort
+            // (it is unreliable against a compressed single-file apphost).
+            Icon = EmbeddedAssets.LoadIcon("icon.ico");
+            if (Icon == null)
+            {
+                try
+                {
+                    var exe = Application.ExecutablePath;
+                    if (!string.IsNullOrEmpty(exe)) Icon = Icon.ExtractAssociatedIcon(exe);
+                }
+                catch { }
+            }
             MinimumSize = new Size(880, 600);
             Size = new Size(1000, 740);
             StartPosition = FormStartPosition.CenterScreen;
@@ -167,8 +181,15 @@ namespace BrowseSafe
                 BackColor = Color.Transparent,
                 Cursor = Cursors.Hand,
             };
-            try { themeIcon.Image = Image.FromFile(System.IO.Path.Combine(AppContext.BaseDirectory, "dark-light.png")); }
-            catch { /* icon missing - label still works */ }
+            // Load a mono (black-on-transparent) icon and tint it to match the current theme text color.
+            // Loaded from the embedded resource so it ships inside the single-file exe.
+            Image? _themeIconSource = EmbeddedAssets.LoadImage("dark-light.png");
+
+            if (_themeIconSource != null)
+            {
+                // Use the source image as-is; do not recolor or tint so the icon remains the original black/white circle.
+                themeIcon.Image = _themeIconSource;
+            }
             themeIcon.Click += (_, _) => ToggleTheme();
 
             var themeLabel = new Label
@@ -194,12 +215,14 @@ namespace BrowseSafe
                 Cursor = Cursors.Hand,
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
             };
-            aboutButton.Click += (_, _) => { try { using var f = new AboutForm(); f.ShowDialog(this); } catch { MessageBox.Show(this, "Browse Safe - Chrome Safety Check\n\nA small tool to inspect Chrome, extensions, and local system indicators relevant to browsing safety.", "About Browse Safe", MessageBoxButtons.OK, MessageBoxIcon.Information); } };
+            aboutButton.Click += (_, _) => { try { var f = new AboutForm(); f.Show(); } catch { MessageBox.Show(this, "Browse Safe - Chrome Safety Check\n\nA small tool to inspect Chrome, extensions, and local system indicators relevant to browsing safety.", "About Browse Safe", MessageBoxButtons.OK, MessageBoxIcon.Information); } };
             tip.SetToolTip(aboutButton, "About Browse Safe");
 
             _leftBottom.Controls.Add(themeIcon);
             _leftBottom.Controls.Add(themeLabel);
             _leftBottom.Controls.Add(aboutButton);
+
+            // Note: theme icon intentionally left unmodified so it always displays the original asset.
 
             _leftPanel.Controls.Add(flow);
             _leftPanel.Controls.Add(_leftBottom);
@@ -221,12 +244,16 @@ namespace BrowseSafe
                 "Click to scan.", ScanSteps(), reportVerdict: true);
             _scanView.Completed += OnScanCompleted;
 
+            AddViewTab("Patches", "patches", TabViews.BuildPatches());
             AddViewTab("Chrome", "chrome", TabViews.BuildChrome());
             AddViewTab("Services", "services", TabViews.BuildServices());
             AddViewTab("Processes", "processes", TabViews.BuildProcesses());
             AddViewTab("Startup", "startup", TabViews.BuildStartup());
             AddViewTab("Installed", "installed", TabViews.BuildInstalled());
             AddViewTab("Devices", "devices", TabViews.BuildDevices());
+            AddViewTab("Events", "events", TabViews.BuildEvents());
+            AddViewTab("Firewall", "firewall", TabViews.BuildFirewall());
+
             AddViewTab("Links", "links", TabViews.BuildLinks());
 
             // Add Fill first, then Left, then Top items (outermost added last).
@@ -340,6 +367,7 @@ namespace BrowseSafe
             ["startup"] = "Startup on login",
             ["installed"] = "Installed program changes",
             ["devices"] = "Installed device changes",
+            ["events"] = "Recent system & security events",
         };
 
         /// <summary>Tab/banner background colour for a severity (selected = stronger shade).</summary>

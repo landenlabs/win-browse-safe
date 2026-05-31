@@ -9,7 +9,9 @@
     <RootNamespace>BrowseSafe</RootNamespace>
     <AssemblyName>BrowseSafe</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
     <Version>6.05.26</Version>
+    <Copyright>LanDen Labs (2026)</Copyright>
     <!-- targeted runtime identifiers for publishing self-contained or RID-specific assets -->
     <RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
     <Company>LanDen Labs</Company>
@@ -20,13 +22,25 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="landenlabs_400.gif" />
+    <None Remove="landenlabs_400.png" />
     <None Remove="links.html" />
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="dark-light.png">
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="dark-light.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
+    </EmbeddedResource>
+    <!-- Embedded so the window/taskbar icon loads from inside the single-file exe.
+         Still referenced by <ApplicationIcon> above for the exe's File Explorer icon. -->
+    <EmbeddedResource Include="icon.ico" />
+    <None Include="app.rc">
+      <SubType>Designer</SubType>
+    </None>
   </ItemGroup>
 
   <ItemGroup>
@@ -37,6 +51,17 @@
 
   <ItemGroup>
     <None Include=".github\workflows\publish.yml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embedded so they ship inside the single-file exe (install.bat copies only the exe).
+         Also copied to the output dir so debug runs from the build folder still find them on disk. -->
+    <EmbeddedResource Include="landenlabs_400.gif">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
+    <EmbeddedResource Include="landenlabs_400.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

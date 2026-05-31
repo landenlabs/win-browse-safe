@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -15,6 +16,7 @@ namespace BrowseSafe
         public int Width = 100;
         public int Fill = 0;                                  // >0 => fill column with this weight
         public bool Button = false;                           // render as a clickable button cell
+        public bool Link = false;                             // render as a clickable link cell
         public string ButtonText = "";
         public Func<object, string> Text = _ => "";           // cell display text
         public Func<object, IComparable>? Sort = null;        // sort key (defaults to Text)
@@ -188,6 +190,14 @@ namespace BrowseSafe
                         Text = c.ButtonText, UseColumnTextForButtonValue = true,
                         FlatStyle = FlatStyle.System,
                         SortMode = DataGridViewColumnSortMode.NotSortable,
+                    };
+                }
+                else if (c.Link)
+                {
+                    col = new DataGridViewLinkColumn
+                    {
+                        TrackVisitedState = false,
+                        SortMode = DataGridViewColumnSortMode.Programmatic,
                     };
                 }
                 else
@@ -441,12 +451,29 @@ namespace BrowseSafe
 
         private void OnCellClick(object? sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0 || e.ColumnIndex != _buttonColIndex || _onButton == null) return;
-            if (_grid.Rows[e.RowIndex].Tag is { } item)
+            if (e.RowIndex < 0) return;
+            // Button click
+            if (e.ColumnIndex == _buttonColIndex && _onButton != null)
             {
-                _grid.ClearSelection();
-                _grid.Rows[e.RowIndex].Selected = true;
-                _onButton(item);
+                if (_grid.Rows[e.RowIndex].Tag is { } item)
+                {
+                    _grid.ClearSelection();
+                    _grid.Rows[e.RowIndex].Selected = true;
+                    _onButton(item);
+                }
+                return;
+            }
+
+            // Link cell click: open URL if the column is a link
+            if (e.ColumnIndex >= 0 && e.ColumnIndex < _cols.Length && _cols[e.ColumnIndex].Link)
+            {
+                var cell = _grid.Rows[e.RowIndex].Cells[e.ColumnIndex];
+                var text = cell.Value?.ToString();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    try { Process.Start(new ProcessStartInfo(text) { UseShellExecute = true }); }
+                    catch { try { Process.Start(new ProcessStartInfo("cmd", $"/c start \"\" \"{text}\"") { CreateNoWindow = true }); } catch { } }
+                }
             }
         }
 

@@ -6,6 +6,9 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Management;
+using Microsoft.Win32;
+using Microsoft.Win32.SafeHandles;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Web;
@@ -53,6 +56,190 @@ namespace BrowseSafe
                 severity: items => WorstDays(items, o => (o as InstalledProgram)?.DaysOld));
             return grid;
         }
+
+        // ---- Firewall info tab ----------------------------------------- //
+        public static Control BuildFirewall()
+        {
+            var panel = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface };
+            var flow = new FlowLayoutPanel { Dock = DockStyle.Top, FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(12) };
+
+            var lblEnabled = new Label { AutoSize = true, ForeColor = Theme.Text, Font = new Font("Segoe UI", 10f) };
+            var lblRules = new Label { AutoSize = true, ForeColor = Theme.Text, Font = new Font("Segoe UI", 10f) };
+            var lblLast = new Label { AutoSize = true, ForeColor = Theme.Text, Font = new Font("Segoe UI", 10f) };
+
+            var btnManage = new Button { Text = "Manage Firewall", AutoSize = true, FlatStyle = FlatStyle.System };
+
+            flow.Controls.Add(lblEnabled);
+            flow.Controls.Add(lblRules);
+            flow.Controls.Add(lblLast);
+            flow.Controls.Add(new Label { Height = 8 });
+            flow.Controls.Add(btnManage);
+
+            panel.Controls.Add(flow);
+
+            void Update()
+            {
+                try
+                {
+                    bool enabled = IsFirewallEnabled();
+                    lblEnabled.Text = "Firewall enabled: " + (enabled ? "Yes" : "No");
+
+                    int rules = GetFirewallRuleCount();
+                    lblRules.Text = "Firewall rules: " + rules;
+
+                    var last = GetFirewallRegistryLastModified();
+                    lblLast.Text = "Last rule change: " + (last.HasValue ? last.Value.ToString("yyyy-MM-dd HH:mm") : "Unknown");
+                }
+                catch (Exception ex)
+                {
+                    lblEnabled.Text = "Firewall status: error";
+                    lblRules.Text = ex.Message;
+                }
+            }
+
+            // Open Windows Defender Firewall with Advanced Security (the rule manager).
+            btnManage.Click += (_, _) => StartShell(btnManage, "wf.msc");
+            Update();
+            Theme.Changed += () => { if (panel.IsHandleCreated) panel.BeginInvoke(new Action(() => { lblEnabled.ForeColor = Theme.Text; lblRules.ForeColor = Theme.Text; lblLast.ForeColor = Theme.Text; })); };
+            return panel;
+        }
+
+        private static bool IsFirewallEnabled()
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\StandardProfile");
+                if (key == null) return false;
+                var val = key.GetValue("EnableFirewall");
+                if (val is int i) return i != 0;
+                if (val is string s && int.TryParse(s, out int r)) return r != 0;
+            }
+            catch { }
+            return false;
+        }
+
+        private static int GetFirewallRuleCount()
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules");
+                if (key == null) return 0;
+                return key.ValueCount;
+            }
+            catch { return 0; }
+        }
+
+        private static DateTime? GetFirewallRegistryLastModified()
+        {
+            // The previous version shelled out to PowerShell and read
+            // (Get-Item <regkey>).LastWriteTime -- but a RegistryKey has no LastWriteTime
+            // member, so that expression was always $null and the date never resolved.
+            // A registry key's last-write time is only exposed by the Win32 RegQueryInfoKey
+            // API, so query it directly below.
+            //
+            // FirewallRules holds the local rule store; when the firewall is managed by
+            // another product (e.g. CrowdStrike) that key can be empty, so also consider
+            // the policy/profile keys and report the most recent change across all of them.
+            const string baseP = @"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy";
+            string[] candidates =
+            {
+                baseP + @"\FirewallRules",
+                baseP + @"\RestrictedServices\Configurable\System",
+                baseP + @"\StandardProfile",
+                baseP + @"\PublicProfile",
+                baseP + @"\DomainProfile",
+                baseP,
+            };
+
+            DateTime? latest = null;
+            foreach (var path in candidates)
+            {
+                var t = RegKeyLastWriteTime(path);
+                if (t.HasValue && (latest == null || t.Value > latest.Value)) latest = t;
+            }
+            return latest;
+        }
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern int RegQueryInfoKey(
+            SafeRegistryHandle hKey, IntPtr lpClass, IntPtr lpcchClass, IntPtr lpReserved,
+            IntPtr lpcSubKeys, IntPtr lpcbMaxSubKeyLen, IntPtr lpcbMaxClassLen,
+            IntPtr lpcValues, IntPtr lpcbMaxValueNameLen, IntPtr lpcbMaxValueLen,
+            IntPtr lpcbSecurityDescriptor,
+            out System.Runtime.InteropServices.ComTypes.FILETIME lpftLastWriteTime);
+
+        // Returns the last-write time of an HKLM subkey via RegQueryInfoKey, or null if the
+        // key is missing or the query fails.
+        private static DateTime? RegKeyLastWriteTime(string subKeyPath)
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(subKeyPath);
+                if (key == null) return null;
+                if (RegQueryInfoKey(key.Handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero,
+                        IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero,
+                        IntPtr.Zero, IntPtr.Zero, out var ft) != 0)
+                    return null;
+                long ticks = ((long)(uint)ft.dwHighDateTime << 32) | (uint)ft.dwLowDateTime;
+                if (ticks <= 0) return null;
+                return DateTime.FromFileTimeUtc(ticks).ToLocalTime();
+            }
+            catch { return null; }
+        }
+
+        // ---- Patches: recent Windows patches --------------------------- //
+        public static Control BuildPatches()
+        {
+            var cols = new[]
+            {
+                new GridColumn { Header = "Status", Width = 80,
+                    Text = o => Recency(((WindowsPatch)o).DaysOld).Label,
+                    Sort = o => ((WindowsPatch)o).InstalledOn,
+                    Style = o => RecencyStyle(((WindowsPatch)o).DaysOld) },
+                new GridColumn { Header = "Installed", Width = 120, Text = o => ((WindowsPatch)o).InstalledOn.ToString("yyyy-MM-dd"), Sort = o => ((WindowsPatch)o).InstalledOn },
+
+                new GridColumn { Header = "HotFix ID", Width = 110, Text = o => ((WindowsPatch)o).HotFixID, Sort = o => ((WindowsPatch)o).InstalledOn },
+                new GridColumn { Header = "Version", Width = 110, Text = o => ((WindowsPatch)o).Version, Sort = o => ((WindowsPatch)o).Version },
+                new GridColumn { Header = "DocLink", Width = 110, Link = true, Text = o => ((WindowsPatch)o).DocLink, Sort = o => ((WindowsPatch)o).DocLink },
+
+                new GridColumn { Header = "Description", Fill = 180, Text = o => ((WindowsPatch)o).Description },
+                           };
+
+            SortableGrid grid = null!;
+            grid = new SortableGrid("Refresh",
+                () => GetPatches().Cast<object>().ToList(),
+                cols, defaultSortColumn: 2, defaultAscending: false,
+                legend: "Recent Windows updates (from WMI)",
+                severity: items => TabSeverity.None);
+            return grid;
+        }
+
+        private static System.Collections.Generic.List<WindowsPatch> GetPatches()
+        {
+            var list = new System.Collections.Generic.List<WindowsPatch>();
+            try
+            {
+                var searcher = new ManagementObjectSearcher("SELECT HotFixID, Description, InstalledOn, Caption, ServicePackInEffect FROM Win32_QuickFixEngineering");
+                foreach (ManagementObject obj in searcher.Get())
+                {
+                    string id = obj["HotFixID"]?.ToString() ?? "Unknown";
+                    string desc = obj["Description"]?.ToString() ?? "";
+                    string raw = obj["InstalledOn"]?.ToString();
+
+                    string doc = obj["Caption"]?.ToString();
+                    string ver = obj["ServicePackInEffect"]?.ToString();
+
+                    if (DateTime.TryParse(raw, out DateTime dt)) {
+                        int daysOld = Math.Max(0, (int)(DateTime.Now - dt).TotalDays);
+                        list.Add(new WindowsPatch { HotFixID = id, Description = desc, InstalledOn = dt, DaysOld = daysOld, DocLink = doc, Version = ver });
+                    }
+                }
+            }
+            catch { }
+            return list.OrderByDescending(p => p.InstalledOn).ToList();
+        }
+
+        private class WindowsPatch { public string HotFixID = ""; public string Description = ""; public DateTime InstalledOn; public int DaysOld; public string DocLink = ""; public string Version = ""; }
         private static void ShowInstalledMenu(Control owner, InstalledProgram inst) {
             var menu = new ContextMenuStrip();
             var enabled = true;
@@ -85,9 +272,8 @@ namespace BrowseSafe
                 ScriptErrorsSuppressed = true,
             };
 
-            string htmlPath = Path.Combine(AppContext.BaseDirectory, "links.html");
-            string html = null;
-            try { if (File.Exists(htmlPath)) html = File.ReadAllText(htmlPath); } catch { }
+            // Loaded from the embedded resource so it ships inside the single-file exe.
+            string? html = EmbeddedAssets.ReadText("links.html");
             if (string.IsNullOrEmpty(html))
             {
                 html =
@@ -510,6 +696,106 @@ namespace BrowseSafe
                 MessageBox.Show(owner.FindForm(), $"Could not open '{target}': {ex.Message}",
                     "Startup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
+        }
+
+        // ---- Events: recent Windows Event Log issues --------------------- //
+        public static Control BuildEvents()
+        {
+            SortableGrid grid = null!;
+            var cols = new[]
+            {
+                new GridColumn { Header = "Status", Width = 90,
+                    Text = o => EventStatusLabel((EventItem)o),
+                    Sort = o => EventRank((EventItem)o),
+                    Style = o => EventStatusStyle((EventItem)o) },
+                new GridColumn { Header = "Time", Width = 120,
+                    Text = o => ((EventItem)o).TimeText,
+                    Sort = o => ((EventItem)o).TimeSort },
+                new GridColumn { Header = "Channel", Width = 150,
+                    Text = o => SafetyChecks.ShortChannel(((EventItem)o).Channel),
+                    Sort = o => ((EventItem)o).Channel },
+                new GridColumn { Header = "Source", Width = 170, Text = o => ((EventItem)o).Source },
+                new GridColumn { Header = "Event", Width = 60,
+                    Text = o => ((EventItem)o).EventId.ToString(),
+                    Sort = o => ((EventItem)o).EventId },
+                new GridColumn { Header = "Message", Fill = 200, Text = o => ((EventItem)o).Message },
+            };
+            grid = new SortableGrid("Refresh",
+                () => SafetyChecks.GetEventLogIssues().Cast<object>().ToList(),
+                cols, defaultSortColumn: 1, defaultAscending: false,
+                extraButtons: new (string, Action)[] { ("Event Viewer", OpenEventViewer) },
+                legend: "Critical/Error from System & Application plus security events (Defender, Firewall rule changes, new services, audit clears). Security log needs admin. Right-click a row for actions.",
+                severity: WorstEvents,
+                onRowContext: o => ShowEventMenu(grid, (EventItem)o));
+            return grid;
+        }
+
+        // Status label + colour: security-significant and Critical -> red; Error/Warning -> yellow.
+        private static string EventStatusLabel(EventItem e)
+        {
+            if (e.Significant) return "Security";
+            if (e.Level.Equals("Critical", StringComparison.OrdinalIgnoreCase)) return "Critical";
+            if (e.Level.Equals("Error", StringComparison.OrdinalIgnoreCase)) return "Error";
+            if (e.Level.Equals("Warning", StringComparison.OrdinalIgnoreCase)) return "Warning";
+            return e.Level.Length > 0 ? e.Level : "Info";
+        }
+
+        private static (Color Back, Color Fore)? EventStatusStyle(EventItem e)
+        {
+            if (e.Significant || e.Level.Equals("Critical", StringComparison.OrdinalIgnoreCase)) return (RedBack, RedFore);
+            if (e.Level.Equals("Error", StringComparison.OrdinalIgnoreCase) ||
+                e.Level.Equals("Warning", StringComparison.OrdinalIgnoreCase)) return (YelBack, YelFore);
+            return null;
+        }
+
+        // Sort key for the Status column (higher = more severe / floats to top when descending).
+        private static IComparable EventRank(EventItem e)
+        {
+            if (e.Significant) return 4;
+            return e.Level.ToLowerInvariant() switch
+            {
+                "critical" => 3,
+                "error" => 2,
+                "warning" => 1,
+                _ => 0,
+            };
+        }
+
+        private static TabSeverity WorstEvents(System.Collections.Generic.IReadOnlyList<object> items)
+        {
+            var s = TabSeverity.None;
+            foreach (var o in items)
+            {
+                if (o is not EventItem e) continue;
+                if (e.Significant || e.Level.Equals("Critical", StringComparison.OrdinalIgnoreCase))
+                    s = Sev.Max(s, TabSeverity.Alert);
+                else if (e.Level.Equals("Error", StringComparison.OrdinalIgnoreCase) ||
+                         e.Level.Equals("Warning", StringComparison.OrdinalIgnoreCase))
+                    s = Sev.Max(s, TabSeverity.Caution);
+                else
+                    s = Sev.Max(s, TabSeverity.Ok);
+            }
+            return s;
+        }
+
+        private static void OpenEventViewer()
+        {
+            try { Process.Start(new ProcessStartInfo("eventvwr.msc") { UseShellExecute = true }); }
+            catch { /* ignore */ }
+        }
+
+        private static void ShowEventMenu(Control owner, EventItem e)
+        {
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Open Event Viewer", null, (_, _) => OpenEventViewer());
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Copy message", null, (_, _) => { try { Clipboard.SetText(e.Message); } catch { } });
+            menu.Items.Add("Search web for this event", null, (_, _) =>
+            {
+                string q = HttpUtility.UrlEncode($"Windows event {e.EventId} {SafetyChecks.ShortChannel(e.Channel)} {e.Source}");
+                OpenBrowser($"https://www.google.com/search?q={q}");
+            });
+            menu.Show(Cursor.Position);
         }
 
         // ---- Shared helpers ---------------------------------------------- //

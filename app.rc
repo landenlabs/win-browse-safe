@@ -1,0 +1,4 @@
+// Resource script to include application icon
+// The icon file 'icon.ico' should be placed in the project root.
+
+1 ICON "icon.ico"

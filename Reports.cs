@@ -29,6 +29,7 @@ namespace BrowseSafe
             ("startup",   "Startup", new Func<CheckGroup>[] { SafetyChecks.CheckStartup }),
             ("installed", "Installed", new Func<CheckGroup>[] { SafetyChecks.CheckInstalled }),
             ("devices",   "Devices", new Func<CheckGroup>[] { SafetyChecks.CheckDevices }),
+            ("events",    "Event Log", new Func<CheckGroup>[] { SafetyChecks.CheckEventLog }),
         };
 
         public static IEnumerable<string> Scopes => Catalog.Select(c => c.Key).Append("all");

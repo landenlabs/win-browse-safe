@@ -1,6 +1,7 @@
 // Copyright (c) 2026 LanDen Labs - Dennis Lang
 
 using System;
+using System.Management;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
