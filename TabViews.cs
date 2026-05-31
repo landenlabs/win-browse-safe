@@ -6,8 +6,11 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using System.Web;
 using System.Windows.Forms;
+using System.Xml.Linq;
 
 namespace BrowseSafe
 {
@@ -38,6 +41,7 @@ namespace BrowseSafe
                     Sort = o => VersionKey(((InstalledProgram)o).Version) },
                 new GridColumn { Header = "Program name", Fill = 130, Text = o => ((InstalledProgram)o).Name },
                 new GridColumn { Header = "Description", Fill = 120, Text = o => ((InstalledProgram)o).Description },
+                new GridColumn { Header = "Path", Width = 120, Text = o => ((InstalledProgram)o).ExePath??"" },
             };
             grid = new SortableGrid("Refresh",
                 () => SafetyChecks.GetInstalledPrograms().Cast<object>().ToList(),
@@ -45,8 +49,29 @@ namespace BrowseSafe
                 onButtonClick: o => { var p = (InstalledProgram)o; ShowScanMenu(grid, p.Name, () => SafetyChecks.ResolveExeForScan(p)); },
                 extraButtons: new (string, Action)[] { ("Apps && features…", OpenAppsSettings) },
                 legend: "Recent <7d   Month <30d   Old >30d",
+                onRowContext: o => ShowInstalledMenu(grid, (InstalledProgram)o),
                 severity: items => WorstDays(items, o => (o as InstalledProgram)?.DaysOld));
             return grid;
+        }
+        private static void ShowInstalledMenu(Control owner, InstalledProgram inst) {
+            var menu = new ContextMenuStrip();
+            var enabled = true;
+            if (inst.ExePath is not null) {
+                string exeDir = Path.GetDirectoryName(inst.ExePath) ?? "";
+
+                var open = new ToolStripMenuItem("Open file location", null, (_, _) => OpenLocation(owner, inst.ExePath, exeDir)) { Enabled = enabled };
+                menu.Items.Add(open);
+                menu.Items.Add(new ToolStripSeparator());
+                menu.Items.Add("Copy Exe path", null, (_, _) => { try { Clipboard.SetText(inst.ExePath); } catch { } })
+                    .Enabled = enabled;
+
+                var search = new ToolStripMenuItem("Search web ", null, (_, _) => SearchFor(owner, inst.ExePath)) { Enabled = enabled };
+                menu.Items.Add(search);
+            } else {
+                var search = new ToolStripMenuItem("Search web ", null, (_, _) => SearchFor(owner, inst.Name)) { Enabled = enabled };
+                menu.Items.Add(search);
+            }
+            menu.Show(Cursor.Position);
         }
 
         // ---- Links: render the links.html file in a browser control ----- //
@@ -156,6 +181,7 @@ namespace BrowseSafe
                 extraButtons: new (string, Action)[] { ("Task Manager", OpenTaskManager) },
                 legend: "Off: only unusual (non-Windows) processes with Old status.  Recent <7d  Month <30d  Old >30d",
                 severity: items => WorstDays(items, o => (o as ProcessItem)?.DaysOld),
+                onRowContext: o => ShowProcessMenu(grid, (ProcessItem)o),
                 showAllToggle: ("Show all", o =>
                 {
                     var p = (ProcessItem)o;
@@ -165,7 +191,23 @@ namespace BrowseSafe
                 }));
             return grid;
         }
+        private static void ShowProcessMenu(Control owner, ProcessItem proc) {
+            string exeDir = Path.GetDirectoryName(proc.ExePath);
+            var menu = new ContextMenuStrip();
+            var enabled = proc.ExePath.Length > 0;
 
+            var open = new ToolStripMenuItem("Open file location", null, (_, _) => OpenLocation(owner, proc.ExePath, exeDir))
+            { Enabled = enabled };
+            menu.Items.Add(open);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Copy Exe path", null, (_, _) => { try { Clipboard.SetText(proc.ExePath); } catch { } })
+                .Enabled = enabled;
+
+            var search = new ToolStripMenuItem("Search web ", null, (_, _) => SearchFor(owner, proc.ExePath)) { Enabled = enabled };
+            menu.Items.Add(search);
+
+            menu.Show(Cursor.Position);
+        }
         private static void OpenTaskManager()
         {
             try { Process.Start(new ProcessStartInfo("taskmgr.exe") { UseShellExecute = true }); }
@@ -256,6 +298,7 @@ namespace BrowseSafe
                     Text = o => ((ChromeExtension)o).ManifestVersion?.ToString() ?? "?",
                     Sort = o => ((ChromeExtension)o).ManifestVersion ?? 0 },
                 new GridColumn { Header = "Description", Fill = 120, Text = o => ((ChromeExtension)o).Description },
+                new GridColumn { Header = "Path", Width = 120, Text = o => ((ChromeExtension)o).ProfileDir },
             };
             SortableGrid grid = null!;
             grid = new SortableGrid("Refresh",
@@ -274,10 +317,20 @@ namespace BrowseSafe
                         }
                     return s;
                 },
+                onRowContext: o => ShowChromeMenu(grid, (ChromeExtension)o),
                 headerButton: ("Scan", () => ShowScanMenu(grid, "chrome.exe", SafetyChecks.ChromeExePath)));
             return grid;
         }
-
+        private static void ShowChromeMenu(Control owner, ChromeExtension ext) {
+            string exeDir = ext.ProfileDir;
+            var menu = new ContextMenuStrip();
+            var open = new ToolStripMenuItem("Open extension location", null, (_, _) => OpenLocation(owner, "", exeDir)) { Enabled = exeDir.Length > 0 };
+            menu.Items.Add(open);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Copy extension path", null, (_, _) => { try { Clipboard.SetText(exeDir); } catch { } })
+                .Enabled = exeDir.Length > 0;
+            menu.Show(Cursor.Position);
+        }
         // ---- Services ---------------------------------------------------- //
         public static Control BuildServices()
         {
@@ -399,6 +452,35 @@ namespace BrowseSafe
             menu.Items.Add("Manage startup apps (Settings)", null, (_, _) => StartShell(owner, "ms-settings:startupapps"));
             menu.Items.Add("Open Task Manager", null, (_, _) => StartShell(owner, "taskmgr.exe"));
             menu.Show(Cursor.Position);
+        }
+        private static void SearchFor(Control owner, string fullPath) {
+            string fileName = Path.GetFileName(fullPath);
+            string encodedExe = HttpUtility.UrlEncode("what is windows program " + fileName);
+            string url = $"https://www.google.com/search?q={encodedExe}";
+            OpenBrowser(url);
+        }
+        static void OpenBrowser(string url) {
+            try {
+                // Windows approach
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
+                    // In .NET Core/.NET 5+, UseShellExecute defaults to false, 
+                    // so we must explicitly set it to true to launch a URL.
+                    Process.Start(new ProcessStartInfo {
+                        FileName = url,
+                        UseShellExecute = true
+                    });
+                }
+                // Linux approach
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) {
+                    Process.Start("xdg-open", url);
+                }
+                // macOS approach
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) {
+                    Process.Start("open", url);
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"Could not open browser: {ex.Message}");
+            }
         }
 
         private static void OpenLocation(Control owner, string exePath, string dir)

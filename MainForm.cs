@@ -182,8 +182,24 @@ namespace BrowseSafe
             tip.SetToolTip(themeIcon, "Toggle dark / light theme");
             tip.SetToolTip(themeLabel, "Toggle dark / light theme");
 
+            var aboutButton = new Button
+            {
+                Width = 36,
+                Height = 36,
+                Left = Math.Max(0, _leftBottom.Width - 44),
+                Top = 8,
+                Text = "?",
+                FlatStyle = FlatStyle.System,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Cursor = Cursors.Hand,
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+            };
+            aboutButton.Click += (_, _) => { try { using var f = new AboutForm(); f.ShowDialog(this); } catch { MessageBox.Show(this, "Browse Safe - Chrome Safety Check\n\nA small tool to inspect Chrome, extensions, and local system indicators relevant to browsing safety.", "About Browse Safe", MessageBoxButtons.OK, MessageBoxIcon.Information); } };
+            tip.SetToolTip(aboutButton, "About Browse Safe");
+
             _leftBottom.Controls.Add(themeIcon);
             _leftBottom.Controls.Add(themeLabel);
+            _leftBottom.Controls.Add(aboutButton);
 
             _leftPanel.Controls.Add(flow);
             _leftPanel.Controls.Add(_leftBottom);

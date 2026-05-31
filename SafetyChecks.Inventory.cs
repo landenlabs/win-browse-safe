@@ -148,7 +148,8 @@ namespace BrowseSafe
 
                         list.Add(new ChromeExtension
                         {
-                            ProfileDir = profile,
+                            ProfileDir = idDir,
+                            ProfileId = profile,
                             ProfileName = friendly,
                             Name = name,
                             Version = version,

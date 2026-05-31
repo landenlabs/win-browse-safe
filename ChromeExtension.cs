@@ -8,6 +8,7 @@ namespace BrowseSafe
     public sealed class ChromeExtension
     {
         public string ProfileDir = "";
+        public string ProfileId = "";
         public string ProfileName = "";   // friendly name, falls back to ProfileDir
         public string Name = "";
         public string Version = "";
