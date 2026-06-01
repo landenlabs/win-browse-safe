@@ -54,6 +54,7 @@ namespace BrowseSafe
         private static Color HdrInfo => Theme.Subtle;
 
         private Panel? _topPanel;
+        private Label? _legend;
         private Panel? _headerPanel;
         private CheckGroup? _lastHeader;
         private List<object> _items = new();
@@ -145,12 +146,22 @@ namespace BrowseSafe
 
             if (legend != null)
             {
-                var lg = new Label { AutoSize = true, Top = 12, Left = 0, ForeColor = Theme.Subtle, Text = legend };
-                lg.Dock = DockStyle.Right;
-                lg.TextAlign = ContentAlignment.MiddleRight;
-                lg.Padding = new Padding(0, 12, 10, 0);
-                top.Controls.Add(lg);
-                lg.BringToFront();
+                // Show a compact "Help" label and expose the full legend in a tooltip on hover.
+                _legend = new Label
+                {
+                    Text = "Help",
+                    AutoSize = false,
+                    AutoEllipsis = false,
+                    ForeColor = Theme.Subtle,
+                    TextAlign = ContentAlignment.MiddleRight,
+                    Cursor = Cursors.Help,
+                };
+                var tip = new ToolTip();
+                tip.SetToolTip(_legend, legend);
+                top.Controls.Add(_legend);
+                top.SizeChanged += (_, _) => LayoutLegend();
+                _status.SizeChanged += (_, _) => LayoutLegend();   // status width changes as its text changes
+                LayoutLegend();
             }
 
             _grid = new DataGridView
@@ -300,6 +311,28 @@ namespace BrowseSafe
         }
 
         public void SetStatus(string text) => _status.Text = text;
+
+        /// <summary>Bounds the legend hint to the gap between the status label and the right
+        /// edge, so it can never paint over the toolbar buttons; long text ellipsizes.</summary>
+        private void LayoutLegend()
+        {
+            if (_legend == null || _topPanel == null) return;
+            int left = _status.Right + 12;                                   // always clears the buttons
+            int width = Math.Max(0, _topPanel.ClientSize.Width - 10 - left);
+            _legend.SetBounds(left, 0, width, _topPanel.ClientSize.Height);
+        }
+
+        /// <summary>The currently loaded row objects (e.g. for an in-place enrich-then-refresh action).</summary>
+        public IReadOnlyList<object> Items => _items;
+
+        /// <summary>Re-render the rows in place (no reload/re-sort) and re-evaluate tab severity.
+        /// Use after mutating the loaded row objects, e.g. an INF scan that fills a risk column.</summary>
+        public void RefreshDisplay()
+        {
+            Populate();
+            Severity = _severityEval?.Invoke(_items) ?? TabSeverity.None;
+            SeverityChanged?.Invoke();
+        }
 
         public async Task RunAsync()
         {

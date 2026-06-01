@@ -22,5 +22,9 @@ namespace BrowseSafe
         public string LocalChangedText = "";
         public DateTime LocalSort;          // MinValue when unknown
         public int? DaysOld;                // since LocalChanged
+
+        /// <summary>Result of parsing this driver's .inf, populated on demand by the
+        /// "Scan all INFs" button or the per-row "Analyze INF" action. Null until run.</summary>
+        public InfAnalysis? Inf;
     }
 }

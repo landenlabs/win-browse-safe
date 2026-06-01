@@ -10,6 +10,7 @@ using System.Management;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
 using System.Web;
 using System.Windows.Forms;
@@ -413,6 +414,10 @@ namespace BrowseSafe
                     Text = o => ((DeviceDriver)o).Signed ? "Yes" : "No",
                     Sort = o => ((DeviceDriver)o).Signed ? 1 : 0,
                     Style = o => ((DeviceDriver)o).Signed ? null : ((Color, Color)?)(RedBack, RedFore) },
+                new GridColumn { Header = "INF risk", Width = 70,
+                    Text = o => ((DeviceDriver)o).Inf?.RiskLabel ?? "—",
+                    Sort = o => (int)(((DeviceDriver)o).Inf?.Risk ?? TabSeverity.None),
+                    Style = o => InfRiskStyle((DeviceDriver)o) },
                 new GridColumn { Header = "Local changed", Width = 105,
                     Text = o => ((DeviceDriver)o).LocalChangedText,
                     Sort = o => ((DeviceDriver)o).LocalSort },
@@ -430,9 +435,13 @@ namespace BrowseSafe
             SortableGrid grid = null!;
             grid = new SortableGrid("Refresh",
                 () => SafetyChecks.GetDevices().Cast<object>().ToList(),
-                cols, defaultSortColumn: 2, defaultAscending: false,
-                extraButtons: new (string, Action)[] { ("Device Manager", OpenDeviceManager) },
-                legend: "Status by local INF change:  Recent <7d   Month <30d   Old >30d.  Right-click to open the INF.",
+                cols, defaultSortColumn: 3, defaultAscending: false,
+                extraButtons: new (string, Action)[]
+                {
+                    ("Scan all INFs", () => _ = ScanAllInfs(grid)),
+                    ("Device Manager", OpenDeviceManager),
+                },
+                legend: "Status by local INF change:  Recent <7d   Month <30d   Old >30d.  Scan all INFs, or right-click a row to analyze its INF.",
                 severity: items =>
                 {
                     var s = TabSeverity.None;
@@ -441,6 +450,7 @@ namespace BrowseSafe
                         {
                             s = Sev.Max(s, Sev.FromDays(d.DaysOld));
                             if (!d.Signed) s = Sev.Max(s, TabSeverity.Caution);
+                            if (d.Inf != null) s = Sev.Max(s, d.Inf.Risk);
                         }
                     return s;
                 },
@@ -448,19 +458,88 @@ namespace BrowseSafe
             return grid;
         }
 
+        private static (Color Back, Color Fore)? InfRiskStyle(DeviceDriver d) => d.Inf?.Risk switch
+        {
+            TabSeverity.Alert => (RedBack, RedFore),
+            TabSeverity.Caution => (YelBack, YelFore),
+            _ => null,   // not analyzed, or OK
+        };
+
         private static void ShowDeviceMenu(Control owner, DeviceDriver d)
         {
             string infDir = System.IO.Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.Windows), "INF");
             var menu = new ContextMenuStrip();
+            menu.Items.Add("Analyze INF (signing, dates, registry, directives)", null,
+                (_, _) => AnalyzeInf(owner, d)).Enabled = d.InfPath.Length > 0;
+            menu.Items.Add(new ToolStripSeparator());
             var open = new ToolStripMenuItem("Open file location (INF)", null, (_, _) => OpenLocation(owner, d.InfPath, infDir))
             { Enabled = d.InfPath.Length > 0 };
             menu.Items.Add(open);
-            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Copy INF path", null, (_, _) => { try { Clipboard.SetText(d.InfPath); } catch { } })
                 .Enabled = d.InfPath.Length > 0;
+
+            menu.Items.Add("Search web for this event", null, (_, _) => {
+                string q = HttpUtility.UrlEncode($"Windows driver  {d.Device} by {d.Provider} version {d.Version}");
+                OpenBrowser($"https://www.google.com/search?q={q}");
+            });
+
             menu.Show(Cursor.Position);
         }
+
+        // Parse every listed driver's INF (cached per INF path) and fill the risk column.
+        private static async Task ScanAllInfs(SortableGrid grid)
+        {
+            if (grid.Items.Count == 0) await grid.RunAsync();
+            var drivers = grid.Items.OfType<DeviceDriver>().ToList();
+            if (drivers.Count == 0) { grid.SetStatus("No devices to scan - click Refresh."); return; }
+
+            grid.SetStatus("Analyzing INF files …");
+            int flagged = await Task.Run(() =>
+            {
+                int f = 0;
+                var cache = new Dictionary<string, InfAnalysis>(StringComparer.OrdinalIgnoreCase);
+                foreach (var d in drivers)
+                {
+                    if (!cache.TryGetValue(d.InfPath, out var a)) { a = InfAnalyzer.Analyze(d); cache[d.InfPath] = a; }
+                    d.Inf = a;
+                    if (a.Risk == TabSeverity.Alert || a.Risk == TabSeverity.Caution) f++;
+                }
+                return f;
+            });
+
+            grid.RefreshDisplay();
+            grid.SetStatus($"Analyzed {drivers.Count} drivers - {flagged} flagged. Sort by 'INF risk' or right-click a row for details.");
+        }
+
+        // Analyze one driver's INF and show the detailed findings.
+        private static void AnalyzeInf(Control owner, DeviceDriver d)
+        {
+            var a = InfAnalyzer.Analyze(d);
+            d.Inf = a;
+            if (owner is SortableGrid g) g.RefreshDisplay();
+
+            var sb = new StringBuilder();
+            sb.AppendLine(d.Device);
+            sb.AppendLine($"Provider: {(d.Provider.Length > 0 ? d.Provider : "(none)")}    Signed (Windows): {(d.Signed ? "Yes" : "No")}");
+            sb.AppendLine(d.InfPath);
+            sb.AppendLine();
+            foreach (var f in a.Findings.OrderByDescending(x => (int)x.Severity))
+                sb.AppendLine($"[{SeverityTag(f.Severity)}] {f.Text}");
+
+            var icon = a.Risk == TabSeverity.Alert ? MessageBoxIcon.Warning
+                     : a.Risk == TabSeverity.Caution ? MessageBoxIcon.Exclamation
+                     : MessageBoxIcon.Information;
+            MessageBox.Show(owner.FindForm(), sb.ToString(), $"INF analysis - {a.RiskLabel}",
+                MessageBoxButtons.OK, icon);
+        }
+
+        private static string SeverityTag(TabSeverity s) => s switch
+        {
+            TabSeverity.Alert => "HIGH",
+            TabSeverity.Caution => "REVIEW",
+            _ => "ok",
+        };
 
         // ---- Chrome (executable integrity summary + extensions grid) ----- //
         public static Control BuildChrome()
@@ -795,7 +874,62 @@ namespace BrowseSafe
                 string q = HttpUtility.UrlEncode($"Windows event {e.EventId} {SafetyChecks.ShortChannel(e.Channel)} {e.Source}");
                 OpenBrowser($"https://www.google.com/search?q={q}");
             });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Show details", null, async (_, _) => await ShowEventDetailsAsync(owner, e));
             menu.Show(Cursor.Position);
+        }
+
+        private static async System.Threading.Tasks.Task ShowEventDetailsAsync(Control owner, EventItem e)
+        {
+            string logName = string.IsNullOrEmpty(e.Channel) ? "System" : e.Channel;
+            string provider = string.IsNullOrEmpty(e.Source) ? "Service Control Manager" : e.Source;
+
+            string psCmd = $"Get-WinEvent -FilterHashtable @{{LogName='{logName}'; ProviderName='{provider}'; Id={e.EventId}}} -MaxEvents 1 | Format-List *";
+
+            string output = "";
+            try
+            {
+                var psi = new ProcessStartInfo("powershell")
+                {
+                    Arguments = $"-NoProfile -Command \"{psCmd}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+
+                using var p = Process.Start(psi);
+                if (p != null)
+                {
+                    output = await p.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+                    var err = await p.StandardError.ReadToEndAsync().ConfigureAwait(false);
+                    p.WaitForExit(3000);
+                    if (string.IsNullOrWhiteSpace(output) && !string.IsNullOrWhiteSpace(err)) output = err;
+                }
+            }
+            catch (Exception ex)
+            {
+                output = "Error running PowerShell: " + ex.Message;
+            }
+
+            if (string.IsNullOrWhiteSpace(output)) output = "(no details returned)";
+
+            // Show in a simple dialog
+            try
+            {
+                if (owner?.FindForm() is Form parent)
+                {
+                    var dlg = new Form { Text = $"Event {e.EventId} details", Size = new Size(800, 520), StartPosition = FormStartPosition.CenterParent };
+                    var tb = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, Dock = DockStyle.Fill, Font = new Font("Consolas", 9f), Text = output };
+                    dlg.Controls.Add(tb);
+                    dlg.ShowDialog(parent);
+                }
+                else
+                {
+                    MessageBox.Show(output, $"Event {e.EventId} details", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch { try { MessageBox.Show(output, $"Event {e.EventId} details", MessageBoxButtons.OK, MessageBoxIcon.Information); } catch { } }
         }
 
         // ---- Shared helpers ---------------------------------------------- //

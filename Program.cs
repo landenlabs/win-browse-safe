@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace BrowseSafe
@@ -57,8 +58,34 @@ namespace BrowseSafe
             Application.Run(new MainForm());
         }
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AttachConsole(int dwProcessId);
+        private const int ATTACH_PARENT_PROCESS = -1;
+
+        /// <summary>
+        /// BrowseSafe is a GUI-subsystem (WinExe) app, so it is not attached to the
+        /// console that launched it and Console output is otherwise discarded. Attach to
+        /// the parent console (if any) and rebind stdout/stderr so the headless and
+        /// --help text appears in the terminal. A no-op when launched without a console
+        /// (e.g. from Explorer).
+        /// </summary>
+        private static void EnsureConsole()
+        {
+            try
+            {
+                if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+                var stdout = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
+                Console.SetOut(stdout);
+                var stderr = new StreamWriter(Console.OpenStandardError()) { AutoFlush = true };
+                Console.SetError(stderr);
+            }
+            catch { /* no parent console to attach to */ }
+        }
+
         static void PrintHelp()
         {
+            EnsureConsole();
+
             // Per-tab scopes come from the report catalog so this stays in sync; "all" is
             // appended by Reports.Scopes and runs every scope.
             string scopes = string.Join(", ", Reports.Scopes);
@@ -95,6 +122,8 @@ EXAMPLES:
 
         static void RunHeadless(string scope, string? outPath)
         {
+            EnsureConsole();
+
             if (!Reports.IsValidScope(scope))
             {
                 Console.WriteLine($"Unknown scope '{scope}'. Valid scopes: {string.Join(", ", Reports.Scopes)}");
