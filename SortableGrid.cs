@@ -102,7 +102,8 @@ namespace BrowseSafe
             Action<object>? onRowContext = null,
             (string Label, string Tooltip, Func<object, bool> HideWhenOff)? showAllToggle = null,
             (string Label, Action OnClick)? headerButton = null,
-            HelpInfo? help = null)
+            HelpInfo? help = null,
+            int headerHeight = 104)
         {
             _loader = loader;
             _cols = columns;
@@ -247,7 +248,7 @@ namespace BrowseSafe
             Controls.Add(_grid);
             if (_headerInfo != null)
             {
-                _headerPanel = new Panel { Dock = DockStyle.Top, Height = 104, BackColor = Theme.Surface };
+                _headerPanel = new Panel { Dock = DockStyle.Top, Height = headerHeight, BackColor = Theme.Surface };
                 _header = new RichTextBox
                 {
                     Dock = DockStyle.Fill,

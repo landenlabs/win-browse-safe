@@ -43,6 +43,11 @@ namespace BrowseSafe
                 new GridColumn { Header = "Version", Width = 110,
                     Text = o => ((InstalledProgram)o).Version,
                     Sort = o => VersionKey(((InstalledProgram)o).Version) },
+                new GridColumn { Header = "Update", Width = 100,
+                    Text = o => ((InstalledProgram)o).AvailableVersion,
+                    Sort = o => VersionKey(((InstalledProgram)o).AvailableVersion),
+                    Style = o => ((InstalledProgram)o).HasUpdate ? ((Color, Color)?)(YelBack, YelFore) : null },
+                new GridColumn { Header = "Source", Width = 80, Text = o => ((InstalledProgram)o).Source },
                 new GridColumn { Header = "Program name", Fill = 130, Text = o => ((InstalledProgram)o).Name },
                 new GridColumn { Header = "Description", Fill = 120, Text = o => ((InstalledProgram)o).Description },
                 new GridColumn { Header = "Path", Width = 120, Text = o => ((InstalledProgram)o).ExePath??"" },
@@ -54,7 +59,12 @@ namespace BrowseSafe
                 extraButtons: new (string, Action)[] { ("Apps && features…", OpenAppsSettings) },
                 help: TabHelp.Installed,
                 onRowContext: o => ShowInstalledMenu(grid, (InstalledProgram)o),
-                severity: items => WorstDays(items, o => (o as InstalledProgram)?.DaysOld));
+                severity: items =>
+                {
+                    var s = WorstDays(items, o => (o as InstalledProgram)?.DaysOld);
+                    if (items.Any(o => o is InstalledProgram p && p.HasUpdate)) s = Sev.Max(s, TabSeverity.Caution);
+                    return s;
+                });
             return grid;
         }
 
@@ -597,10 +607,11 @@ namespace BrowseSafe
                 () => SafetyChecks.GetChromeExtensions().Where(e => e.Enabled).Cast<object>().ToList(),
                 cols, defaultSortColumn: 2, defaultAscending: true,
                 help: TabHelp.Chrome,
-                headerInfo: SafetyChecks.CheckChromeExe,
+                headerInfo: SafetyChecks.CheckChromeHeader,
+                headerHeight: 152,
                 severity: items =>
                 {
-                    var s = TabSeverity.None;
+                    var s = SafetyChecks.ChromeSettingsSeverity();   // Safe Browsing / 3p-cookie risk
                     foreach (var o in items)
                         if (o is ChromeExtension x)
                         {
@@ -1130,6 +1141,59 @@ namespace BrowseSafe
                 try { Clipboard.SetText($"{e.Ip}\t{e.Mac}\t{(e.Vendor.Length > 0 ? e.Vendor : e.Oui)}\t{e.State}\t{e.Interface}\t{e.Note}"); }
                 catch { }
             });
+            menu.Show(Cursor.Position);
+        }
+
+        // ---- Restores: Windows System Restore points (admin) ------------- //
+        public static Control BuildRestores()
+        {
+            var cols = new[]
+            {
+                new GridColumn { Header = "Status", Width = 80,
+                    Text = o => ((RestorePoint)o).Risk >= TabSeverity.Caution ? "Review" : "OK",
+                    Sort = o => (int)((RestorePoint)o).Risk,
+                    Style = o => ((RestorePoint)o).Risk >= TabSeverity.Caution ? ((Color, Color)?)(YelBack, YelFore) : null },
+                new GridColumn { Header = "Seq #", Width = 64,
+                    Text = o => ((RestorePoint)o).Sequence.ToString(),
+                    Sort = o => ((RestorePoint)o).Sequence },
+                new GridColumn { Header = "Created", Width = 140,
+                    Text = o => ((RestorePoint)o).CreatedText,
+                    Sort = o => ((RestorePoint)o).Created ?? DateTime.MinValue },
+                new GridColumn { Header = "Age (days)", Width = 80,
+                    Text = o => ((RestorePoint)o).DaysOld?.ToString() ?? "—",
+                    Sort = o => ((RestorePoint)o).DaysOld ?? int.MaxValue },
+                new GridColumn { Header = "Type", Width = 120, Text = o => ((RestorePoint)o).TypeText },
+                new GridColumn { Header = "Description", Fill = 200,
+                    Text = o => { var p = (RestorePoint)o; return p.Note.Length > 0 ? $"{p.Description}  — {p.Note}" : p.Description; } },
+            };
+
+            SortableGrid grid = null!;
+            grid = new SortableGrid("Refresh",
+                () => SafetyChecks.GetRestorePoints().Cast<object>().ToList(),
+                cols, defaultSortColumn: 2, defaultAscending: false,
+                help: TabHelp.Restores,
+                headerInfo: SafetyChecks.RestoreHeader,
+                severity: items =>
+                {
+                    if (items.Count == 0) return TabSeverity.Alert;          // disabled / purged - IoC
+                    var rps = items.OfType<RestorePoint>().ToList();
+                    var s = TabSeverity.Ok;
+                    foreach (var r in rps) s = Sev.Max(s, r.Risk);
+                    int youngest = rps.Min(r => r.DaysOld ?? int.MaxValue);
+                    if (youngest > 90) s = Sev.Max(s, TabSeverity.Caution);  // no recent safety net
+                    return s;
+                },
+                onRowContext: o => ShowRestoreMenu(grid, (RestorePoint)o));
+            return grid;
+        }
+
+        private static void ShowRestoreMenu(Control owner, RestorePoint p)
+        {
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Copy description", null, (_, _) => { try { Clipboard.SetText(p.Description); } catch { } });
+            menu.Items.Add("Copy sequence #", null, (_, _) => { try { Clipboard.SetText(p.Sequence.ToString()); } catch { } });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Open System Protection", null, (_, _) => StartShell(owner, "SystemPropertiesProtection.exe"));
             menu.Show(Cursor.Position);
         }
 

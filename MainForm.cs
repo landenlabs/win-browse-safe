@@ -170,6 +170,21 @@ namespace BrowseSafe
             // Launch Chrome sits below the Windows Security shortcuts.
             flow.Controls.Add(_chromeButton);
 
+            // "Run as Admin" - only when not already elevated. Relaunches via UAC and exits.
+            if (!Elevation.IsAdmin)
+            {
+                var admin = new Button
+                {
+                    Text = "Run as Admin",
+                    Width = 200, Height = 40,
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    FlatStyle = FlatStyle.System,
+                    Margin = new Padding(0, 12, 0, 8),
+                };
+                admin.Click += (_, _) => { if (Elevation.RelaunchAsAdmin()) Application.Exit(); };
+                flow.Controls.Add(admin);
+            }
+
             // Theme toggle pinned to the lower-left of the panel.
             _leftBottom = new Panel { Dock = DockStyle.Bottom, Height = 52, BackColor = Theme.Panel };
             var themeIcon = new PictureBox
@@ -253,6 +268,8 @@ namespace BrowseSafe
             AddViewTab("Devices", "devices", TabViews.BuildDevices());
             AddViewTab("Events", "events", TabViews.BuildEvents());
             AddViewTab("Firewall", "firewall", TabViews.BuildFirewall());
+            if (Elevation.IsAdmin)
+                AddViewTab("Restores", "restores", TabViews.BuildRestores());
 
             AddViewTab("Links", "links", TabViews.BuildLinks());
 
@@ -371,6 +388,7 @@ namespace BrowseSafe
             ["devices"] = "Installed device changes",
             ["events"] = "Recent system & security events",
             ["firewall"] = "Windows Firewall configuration",
+            ["restores"] = "System Restore points",
         };
 
         /// <summary>Tab/banner background colour for a severity (selected = stronger shade).</summary>

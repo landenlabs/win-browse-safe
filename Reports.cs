@@ -26,7 +26,7 @@ namespace BrowseSafe
             ("dns",       "DNS Cache", new Func<CheckGroup>[] { SafetyChecks.CheckDnsCache }),
             ("arp",       "ARP Cache", new Func<CheckGroup>[] { SafetyChecks.CheckArp }),
             ("patches",   "Patches", new Func<CheckGroup>[] { SafetyChecks.CheckPatches }),
-            ("chrome",    "Chrome", new Func<CheckGroup>[] { SafetyChecks.CheckChromeExe, SafetyChecks.CheckChromeExtensions }),
+            ("chrome",    "Chrome", new Func<CheckGroup>[] { SafetyChecks.CheckChromeExe, SafetyChecks.CheckChromePrivacy, SafetyChecks.CheckChromeExtensions }),
             ("services",  "Services", new Func<CheckGroup>[] { SafetyChecks.CheckServices }),
             ("processes", "Processes", new Func<CheckGroup>[] { SafetyChecks.CheckProcesses }),
             ("startup",   "Startup", new Func<CheckGroup>[] { SafetyChecks.CheckStartup }),
@@ -34,6 +34,7 @@ namespace BrowseSafe
             ("devices",   "Devices", new Func<CheckGroup>[] { SafetyChecks.CheckDevices }),
             ("events",    "Event Log", new Func<CheckGroup>[] { SafetyChecks.CheckEventLog }),
             ("firewall",  "Firewall", new Func<CheckGroup>[] { SafetyChecks.CheckFirewall }),
+            ("restores",  "Restore Points", new Func<CheckGroup>[] { SafetyChecks.CheckRestore }),
         };
 
         public static IEnumerable<string> Scopes => Catalog.Select(c => c.Key).Append("all");

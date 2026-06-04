@@ -96,7 +96,19 @@ namespace BrowseSafe
 
         public static readonly HelpInfo Chrome = new("Chrome Extensions",
             "# What this shows\n" +
-            "Enabled Chrome extensions across your profiles. The header summarises the detected chrome.exe.\n" +
+            "Enabled Chrome extensions across your profiles, plus a privacy & security audit in the " +
+            "header panel above the table.\n" +
+            "\n" +
+            "# Header audit\n" +
+            "Read from each profile's Preferences and the Chrome policy registry (configuration only - " +
+            "no cookie values or other sensitive data are read):\n" +
+            "- chrome.exe integrity - path, version, and Authenticode signature.\n" +
+            "- Safe Browsing - OFF is flagged (no phishing/malware blocking); Enhanced is noted.\n" +
+            "- Third-party cookies - 'Allowed' is flagged (cross-site tracking).\n" +
+            "- Cookies on exit - whether cookies are cleared when Chrome closes.\n" +
+            "- Enterprise policy - whether the hardening is enforced by policy or user-changeable.\n" +
+            "Weak settings (Safe Browsing off, or third-party cookies allowed) also colour the Chrome " +
+            "tab so the risk is visible at a glance.\n" +
             "\n" +
             "# Status\n" +
             "- Unsupported - a Manifest V2 (MV2) extension, which Chrome 138+ no longer supports.\n" +
@@ -149,13 +161,27 @@ namespace BrowseSafe
 
         public static readonly HelpInfo Installed = new("Installed Programs",
             "# What this shows\n" +
-            "Programs registered as installed (from the uninstall registry), with status driven by install date.\n" +
+            "Installed programs from the uninstall registry, enriched with winget so the list is a " +
+            "superset: it also includes Store/MSIX apps and adds each package's Source and any pending " +
+            "update. Registry entries keep their install date, Path and Scan action; winget-only rows " +
+            "(Store/MSIX) show Status '—' because Windows reports no install date or path for them.\n" +
             "\n" + Recency +
+            "\n" +
+            "# Columns\n" +
+            "- Update - the newer version winget has available; the cell is highlighted yellow and the " +
+            "tab is flagged when any app has a pending update (outdated software is a security signal).\n" +
+            "- Source - winget / msstore / blank (registry-only).\n" +
             "\n" +
             "# Special actions\n" +
             "- Apps & features... - opens the Windows Settings page.\n" +
-            "- Scan (per row) - verify the program's executable signature or look it up on VirusTotal.\n" +
+            "- Scan (per row) - verify the program's executable signature or look it up on VirusTotal " +
+            "(registry entries only; winget-only rows have no exe path to scan).\n" +
             "- Right-click a row for actions (open location, copy path, search the web).\n" +
+            "\n" +
+            "# Note\n" +
+            "Refresh runs `winget list` (a few seconds). If winget isn't installed, the tab falls back to " +
+            "the registry list with Source/Update blank. Updates come from winget's own data; run " +
+            "`winget upgrade` to apply them.\n" +
             "\n" + Common);
 
         public static readonly HelpInfo Devices = new("Device Drivers",
@@ -202,6 +228,33 @@ namespace BrowseSafe
             "\n" +
             "# Special actions\n" +
             "- Manage Firewall - opens Windows Defender Firewall with Advanced Security (wf.msc).\n");
+
+        public static readonly HelpInfo Restores = new("System Restore Points",
+            "# What this shows\n" +
+            "The Windows System Restore points on this machine (via Get-ComputerRestorePoint). This " +
+            "tab only appears when the app is running as administrator, which is required to read them.\n" +
+            "\n" +
+            "# Why it matters (security)\n" +
+            "- Ransomware disables System Restore and purges shadow copies right after gaining " +
+            "privileges, so a disabled service or ZERO restore points is a high-priority indicator of " +
+            "compromise - the tab header turns red (Alert) in that case.\n" +
+            "- If the youngest restore point is very old (> 90 days), the machine has no effective " +
+            "recovery safety net - flagged Review.\n" +
+            "- Recent install-triggered checkpoints (App install / Driver install) are highlighted so " +
+            "you can map a 'what changed, when' timeline - correlate their timestamps with the Events " +
+            "tab to pinpoint a PUP / bundled-software exposure.\n" +
+            "\n" +
+            "# Columns\n" +
+            "- Seq # / Created / Age - the restore point's sequence number, creation time, and age.\n" +
+            "- Type - App install / App uninstall / Driver install / Settings change / Cancelled.\n" +
+            "\n" +
+            "# Special actions\n" +
+            "- Right-click a row to copy its description or sequence number, or open System Protection.\n" +
+            "\n" +
+            "# Note\n" +
+            "Before rolling back, be aware malware can survive inside an older restore point; cross-check " +
+            "the checkpoint date against any known infection window (e.g. Defender events) first.\n" +
+            "\n" + Common);
 
         public static readonly HelpInfo Links = new("Helpful Links",
             "# What this shows\n" +

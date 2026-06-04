@@ -637,14 +637,20 @@ namespace BrowseSafe
             {
                 if (++shown > MaxList) break;
                 bool recent = p.DaysOld is < 14;
-                group.Add(recent ? CheckStatus.Warn : CheckStatus.Info, p.Name,
+                group.Add(recent || p.HasUpdate ? CheckStatus.Warn : CheckStatus.Info, p.Name,
                     $"{p.InstalledText}  v{p.Version}" +
                     (p.Publisher.Length > 0 ? $"  -  {p.Publisher}" : "") +
+                    (p.Source.Length > 0 ? $"  [{p.Source}]" : "") +
+                    (p.HasUpdate ? $"   -> v{p.AvailableVersion} available" : "") +
                     (recent ? "   (installed/changed in last 14 days)" : ""));
             }
             if (progs.Count > MaxList)
                 group.Add(CheckStatus.Info, "...", $"{progs.Count - MaxList} more not shown.");
-            group.Add(CheckStatus.Info, "Total installed", $"{progs.Count} program(s) registered.");
+
+            int updates = progs.Count(p => p.HasUpdate);
+            group.Add(updates > 0 ? CheckStatus.Warn : CheckStatus.Info, "Total installed",
+                $"{progs.Count} program(s)" +
+                (updates > 0 ? $"; {updates} have an update available (run `winget upgrade`)." : "."));
             return group;
         }
 
@@ -694,7 +700,83 @@ namespace BrowseSafe
 
                 list.Add(p);
             }
+
+            EnrichWithWinget(list);
             return list;
+        }
+
+        /// <summary>
+        /// Adds winget's package Source and pending-update version to the registry list (matched by
+        /// normalized name; truncated winget names match by prefix), and appends winget-only packages
+        /// (Store/MSIX apps not in the registry). No-op when winget is unavailable.
+        /// </summary>
+        private static void EnrichWithWinget(List<InstalledProgram> list)
+        {
+            List<WingetRow> winget;
+            try { winget = RunWingetList(); } catch { return; }
+            if (winget.Count == 0) return;
+
+            var regNorms = list.Select(p => NormName(p.Name)).ToList();
+            var consumed = new bool[winget.Count];
+
+            for (int w = 0; w < winget.Count; w++)
+            {
+                var wr = winget[w];
+                if (wr.Name.Length == 0) continue;
+                bool truncated = IsTruncated(wr.Name);
+                string wn = NormName(StripEllipsis(wr.Name));
+                if (wn.Length == 0) continue;
+
+                for (int r = 0; r < list.Count; r++)
+                {
+                    string rn = regNorms[r];
+                    if (rn.Length == 0) continue;
+                    bool match = truncated ? rn.StartsWith(wn, StringComparison.Ordinal) : rn == wn;
+                    if (!match) continue;
+
+                    var p = list[r];
+                    if (p.Source.Length == 0) p.Source = wr.Source;
+                    if (p.AvailableVersion.Length == 0) p.AvailableVersion = wr.Available;
+                    consumed[w] = true;
+                    break;
+                }
+            }
+
+            for (int w = 0; w < winget.Count; w++)
+            {
+                if (consumed[w]) continue;
+                var wr = winget[w];
+                if (wr.Name.Length == 0) continue;
+                list.Add(new InstalledProgram
+                {
+                    Name = wr.Name,
+                    Version = wr.Version,
+                    Source = wr.Source,
+                    AvailableVersion = wr.Available,
+                    FromWinget = true,
+                    InstallDate = null,
+                    SortDate = DateTime.MinValue,
+                    DaysOld = null,
+                    InstalledText = "—",
+                });
+            }
+        }
+
+        private static string NormName(string s) =>
+            System.Text.RegularExpressions.Regex.Replace((s ?? "").Trim().ToLowerInvariant(), @"\s+", " ");
+
+        private static bool IsTruncated(string s)
+        {
+            s = s.TrimEnd();
+            return s.EndsWith("…", StringComparison.Ordinal) || s.EndsWith("...", StringComparison.Ordinal);
+        }
+
+        private static string StripEllipsis(string s)
+        {
+            s = s.TrimEnd();
+            if (s.EndsWith("…", StringComparison.Ordinal)) s = s[..^1];
+            else if (s.EndsWith("...", StringComparison.Ordinal)) s = s[..^3];
+            return s.TrimEnd();
         }
 
         /// <summary>Verifies a file's Authenticode signature (WinVerifyTrust). Returns (status, signerSubject).</summary>

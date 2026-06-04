@@ -28,5 +28,17 @@ namespace BrowseSafe
 
         /// <summary>Display string for the Installed column ("yyyy-MM-dd" or "—").</summary>
         public string InstalledText = "";
+
+        /// <summary>winget package source (winget / msstore / ...), or "" when unknown.</summary>
+        public string Source = "";
+
+        /// <summary>Pending update version reported by winget's "Available" column, or "" if none.</summary>
+        public string AvailableVersion = "";
+
+        /// <summary>True when winget reports a newer version is available.</summary>
+        public bool HasUpdate => AvailableVersion.Length > 0;
+
+        /// <summary>True for rows that came only from winget (no registry entry, so no date/path).</summary>
+        public bool FromWinget;
     }
 }
