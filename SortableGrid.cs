@@ -100,7 +100,7 @@ namespace BrowseSafe
             Func<CheckGroup>? headerInfo = null,
             Func<IReadOnlyList<object>, TabSeverity>? severity = null,
             Action<object>? onRowContext = null,
-            (string Label, Func<object, bool> HideWhenOff)? showAllToggle = null,
+            (string Label, string Tooltip, Func<object, bool> HideWhenOff)? showAllToggle = null,
             (string Label, Action OnClick)? headerButton = null,
             HelpInfo? help = null)
         {
@@ -131,6 +131,7 @@ namespace BrowseSafe
                     ForeColor = Theme.Text, BackColor = Color.Transparent,
                 };
                 _toggle.CheckedChanged += (_, _) => Populate();
+                if (!string.IsNullOrEmpty(st.Tooltip)) new ToolTip().SetToolTip(_toggle, st.Tooltip);
                 top.Controls.Add(_toggle);
                 x += w + 8;
             }

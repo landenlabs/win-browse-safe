@@ -61,6 +61,39 @@ namespace BrowseSafe
             "- Right-click a row to copy the name or the answer.\n" +
             "\n" + Common);
 
+        public static readonly HelpInfo Arp = new("ARP Neighbor Cache",
+            "# What this shows\n" +
+            "The live IPv4 ARP cache - the local subnet's map of IP address to physical MAC " +
+            "address (the modern `Get-NetNeighbor`, equivalent to `arp -a`). It is a snapshot: " +
+            "entries expire within seconds when idle, so this is a real-time view of the network " +
+            "neighbours this PC has recently talked to, not a persistent log.\n" +
+            "\n" +
+            "# Status\n" +
+            "- Alert  - a MAC address is shared by the default gateway and another IP. That is the " +
+            "classic ARP spoofing / man-in-the-middle (MITM) signature - traffic may be intercepted.\n" +
+            "- Review - a MAC is shared by two or more IPs (could be proxy-ARP or a multi-homed host, " +
+            "or spoofing), or the address is locally-administered / randomized.\n" +
+            "- Static - a manually pinned (Permanent) entry; OK - a normal resolved neighbour.\n" +
+            "\n" +
+            "# Columns\n" +
+            "- MAC / Vendor - the hardware address; Vendor shows the OUI (first 3 bytes) until resolved " +
+            "to a manufacturer name.\n" +
+            "- Type - Dynamic (learned automatically) or Static (pinned via arp -s / New-NetNeighbor).\n" +
+            "- State - Reachable / Stale / Delay / Probe / Permanent, as reported by Windows.\n" +
+            "\n" +
+            "# Special actions\n" +
+            "- All - off by default to hide multicast, broadcast and incomplete rows; turn it on " +
+            "to see the full cache.\n" +
+            "- Resolve vendors - looks up each unique OUI on macvendors.com (throttled) and fills the " +
+            "Vendor column. This makes outbound web requests, so it only runs when you click it.\n" +
+            "- Right-click a row to copy the IP or MAC, look up / search the MAC vendor, or copy the row.\n" +
+            "\n" +
+            "# Note\n" +
+            "Duplicate-IP 'flip' detection needs sampling over time and isn't possible from one snapshot; " +
+            "what's flagged here is a single MAC claimed by multiple IPs. Randomized MACs are common and " +
+            "legitimate on phones and laptops.\n" +
+            "\n" + Common);
+
         public static readonly HelpInfo Chrome = new("Chrome Extensions",
             "# What this shows\n" +
             "Enabled Chrome extensions across your profiles. The header summarises the detected chrome.exe.\n" +
@@ -81,7 +114,7 @@ namespace BrowseSafe
             "\n" + Recency +
             "\n" +
             "# Special actions\n" +
-            "- Show All - off by default to hide the noise of old C:\\Windows\\system32 services; turn it on " +
+            "- All - off by default to hide the noise of old C:\\Windows\\system32 services; turn it on " +
             "to list every service.\n" +
             "- Right-click a row to open the Services console (services.msc), open the service's folder, or " +
             "copy the service name.\n" +
@@ -93,7 +126,7 @@ namespace BrowseSafe
             "\n" + Recency +
             "\n" +
             "# Special actions\n" +
-            "- Show all - off by default to surface only the items worth a look: non-Windows executables with " +
+            "- All - off by default to surface only the items worth a look: non-Windows executables with " +
             "an Old status. Turn it on to list every process.\n" +
             "- Task Manager - opens taskmgr.exe.\n" +
             "- Scan (per row) - verify the executable's signature or look it up on VirusTotal by SHA-256.\n" +

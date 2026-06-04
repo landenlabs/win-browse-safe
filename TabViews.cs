@@ -394,7 +394,9 @@ namespace BrowseSafe
                 help: TabHelp.Processes,
                 severity: items => WorstDays(items, o => (o as ProcessItem)?.DaysOld),
                 onRowContext: o => ShowProcessMenu(grid, (ProcessItem)o),
-                showAllToggle: ("Show all", o =>
+                showAllToggle: ("All",
+                    "Off: show only unusual (non-Windows) processes with an Old executable.  On: show every running process.",
+                    o =>
                 {
                     var p = (ProcessItem)o;
                     bool unusual = p.ExePath.Length > 0 && !p.ExePath.StartsWith(win, StringComparison.OrdinalIgnoreCase);
@@ -646,13 +648,15 @@ namespace BrowseSafe
                 help: TabHelp.Services,
                 severity: items => WorstDays(items, o => (o as ServiceInfo)?.DaysOld),
                 onRowContext: o => ShowServiceMenu(grid, (ServiceInfo)o),
-                showAllToggle: ("Show All", o =>
+                showAllToggle: ("All",
+                    "Off: hide old C:\\Windows\\system32 services to reduce noise.  On: show every installed service.",
+                    o =>
                 {
                     var s = (ServiceInfo)o;
                     string path = s.ExePath.Length > 0 ? s.ExePath : s.PathRaw;
                     bool system32 = path.IndexOf(@"C:\WINDOWS\system32", StringComparison.OrdinalIgnoreCase) >= 0;
                     bool old = s.DaysOld is >= 30;   // "Old" per the recency rules
-                    return system32 && old;          // hidden when Show All is off
+                    return system32 && old;          // hidden when the All toggle is off
                 }));
             return grid;
         }
@@ -1015,6 +1019,116 @@ namespace BrowseSafe
             {
                 string q = HttpUtility.UrlEncode(e.Name.Length > 0 ? e.Name : e.Entry);
                 OpenBrowser($"https://www.google.com/search?q={q}");
+            });
+            menu.Show(Cursor.Position);
+        }
+
+        // ---- ARP: local IPv4 neighbor cache ------------------------------ //
+        public static Control BuildArp()
+        {
+            var cols = new[]
+            {
+                new GridColumn { Header = "Status", Width = 80,
+                    Text = o => ArpStatusLabel((ArpEntry)o),
+                    Sort = o => (int)((ArpEntry)o).Risk,
+                    Style = o => ArpStyle((ArpEntry)o) },
+                new GridColumn { Header = "IP Address", Width = 120,
+                    Text = o => ((ArpEntry)o).Ip,
+                    Sort = o => ArpIpKey(((ArpEntry)o).Ip) },
+                new GridColumn { Header = "MAC", Width = 140, Text = o => ((ArpEntry)o).Mac },
+                new GridColumn { Header = "Vendor", Width = 150,
+                    Text = o => { var e = (ArpEntry)o; return e.Vendor.Length > 0 ? e.Vendor : e.Oui; } },
+                new GridColumn { Header = "Type", Width = 76,
+                    Text = o => { var e = (ArpEntry)o; return e.Mac.Length == 0 ? "—" : e.IsStatic ? "Static" : "Dynamic"; } },
+                new GridColumn { Header = "State", Width = 90, Text = o => ((ArpEntry)o).State },
+                new GridColumn { Header = "Interface", Width = 120, Text = o => ((ArpEntry)o).Interface },
+                new GridColumn { Header = "Note", Fill = 160, Text = o => ((ArpEntry)o).Note },
+            };
+
+            SortableGrid grid = null!;
+            grid = new SortableGrid("Refresh",
+                () => SafetyChecks.GetArpTable().Cast<object>().ToList(),
+                cols, defaultSortColumn: 0, defaultAscending: false,
+                extraButtons: new (string, Action)[] { ("Resolve vendors", () => _ = ResolveArpVendors(grid)) },
+                help: TabHelp.Arp,
+                severity: items =>
+                {
+                    var s = TabSeverity.None;
+                    foreach (var o in items)
+                        if (o is ArpEntry e) s = Sev.Max(s, e.Risk);
+                    return s;
+                },
+                onRowContext: o => ShowArpMenu(grid, (ArpEntry)o),
+                showAllToggle: ("All",
+                    "Off: hide multicast, broadcast and incomplete entries.  On: show the full ARP cache.",
+                    o => ((ArpEntry)o).IsNoise));
+            return grid;
+        }
+
+        private static string ArpStatusLabel(ArpEntry e) => e.Risk switch
+        {
+            TabSeverity.Alert => "Alert",
+            TabSeverity.Caution => "Review",
+            _ => e.IsNoise ? "—" : e.IsStatic ? "Static" : "OK",
+        };
+
+        private static (Color Back, Color Fore)? ArpStyle(ArpEntry e) => e.Risk switch
+        {
+            TabSeverity.Alert => (RedBack, RedFore),
+            TabSeverity.Caution => (YelBack, YelFore),
+            _ => null,
+        };
+
+        /// <summary>Zero-padded sort key so IPv4 addresses sort numerically, not lexically.</summary>
+        private static IComparable ArpIpKey(string ip)
+        {
+            if (System.Net.IPAddress.TryParse(ip, out var addr))
+            {
+                var b = addr.GetAddressBytes();
+                if (b.Length == 4) return $"{b[0]:D3}.{b[1]:D3}.{b[2]:D3}.{b[3]:D3}";
+            }
+            return ip;
+        }
+
+        private static async Task ResolveArpVendors(SortableGrid grid)
+        {
+            var entries = grid.Items.OfType<ArpEntry>().ToList();
+            if (entries.Count == 0) return;
+            grid.SetStatus("Resolving vendors (macvendors.com) …");
+            await Task.Run(() => SafetyChecks.ResolveArpVendors(entries));
+            grid.RefreshDisplay();
+            grid.SetStatus("Vendors resolved.");
+        }
+
+        private static void ShowArpMenu(Control owner, ArpEntry e)
+        {
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Copy IP", null, (_, _) => { try { Clipboard.SetText(e.Ip); } catch { } });
+            menu.Items.Add("Copy MAC", null, (_, _) => { try { Clipboard.SetText(e.Mac); } catch { } })
+                .Enabled = e.Mac.Length > 0;
+            menu.Items.Add(new ToolStripSeparator());
+
+            var lookup = new ToolStripMenuItem("Look up vendor (macvendors.com)", null, async (_, _) =>
+            {
+                string vendor = await Task.Run(() => SafetyChecks.LookupVendor(e.Oui));
+                MessageBox.Show(owner.FindForm(),
+                    vendor.Length > 0 ? $"{e.Mac}\nOUI {e.Oui}\n\nVendor: {vendor}"
+                                      : $"{e.Mac}\nOUI {e.Oui}\n\nNo vendor found (or lookup was rate-limited).",
+                    "MAC vendor", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }) { Enabled = e.Oui.Length == 8 };
+            menu.Items.Add(lookup);
+
+            menu.Items.Add("Search web for this MAC", null, (_, _) =>
+            {
+                string q = HttpUtility.UrlEncode($"{e.Oui} MAC OUI vendor");
+                OpenBrowser($"https://www.google.com/search?q={q}");
+            }).Enabled = e.Oui.Length == 8;
+
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Copy row", null, (_, _) =>
+            {
+                try { Clipboard.SetText($"{e.Ip}\t{e.Mac}\t{(e.Vendor.Length > 0 ? e.Vendor : e.Oui)}\t{e.State}\t{e.Interface}\t{e.Note}"); }
+                catch { }
             });
             menu.Show(Cursor.Position);
         }

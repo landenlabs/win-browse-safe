@@ -24,6 +24,7 @@ namespace BrowseSafe
                 SafetyChecks.CheckWindowsSecurity,
             }),
             ("dns",       "DNS Cache", new Func<CheckGroup>[] { SafetyChecks.CheckDnsCache }),
+            ("arp",       "ARP Cache", new Func<CheckGroup>[] { SafetyChecks.CheckArp }),
             ("patches",   "Patches", new Func<CheckGroup>[] { SafetyChecks.CheckPatches }),
             ("chrome",    "Chrome", new Func<CheckGroup>[] { SafetyChecks.CheckChromeExe, SafetyChecks.CheckChromeExtensions }),
             ("services",  "Services", new Func<CheckGroup>[] { SafetyChecks.CheckServices }),

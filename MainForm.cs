@@ -244,6 +244,7 @@ namespace BrowseSafe
 
             AddViewTab("Patches", "patches", TabViews.BuildPatches());
             AddViewTab("DNS", "dns", TabViews.BuildDns());
+            AddViewTab("ARP", "arp", TabViews.BuildArp());
             AddViewTab("Chrome", "chrome", TabViews.BuildChrome());
             AddViewTab("Services", "services", TabViews.BuildServices());
             AddViewTab("Processes", "processes", TabViews.BuildProcesses());
@@ -360,6 +361,7 @@ namespace BrowseSafe
         {
             ["scan"] = "Local network configuration",
             ["dns"] = "DNS resolver cache",
+            ["arp"] = "Local ARP neighbor cache",
             ["patches"] = "Installed Windows patches",
             ["chrome"] = "Chrome browser and extensions",
             ["services"] = "3rd party background services",
