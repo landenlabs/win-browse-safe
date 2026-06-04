@@ -266,6 +266,7 @@ namespace BrowseSafe
             AddViewTab("Startup", "startup", TabViews.BuildStartup());
             AddViewTab("Installed", "installed", TabViews.BuildInstalled());
             AddViewTab("Devices", "devices", TabViews.BuildDevices());
+            AddViewTab("Win Extn", "winext", TabViews.BuildWinExt());
             AddViewTab("Events", "events", TabViews.BuildEvents());
             AddViewTab("Firewall", "firewall", TabViews.BuildFirewall());
             if (Elevation.IsAdmin)
@@ -386,6 +387,7 @@ namespace BrowseSafe
             ["startup"] = "Startup on login",
             ["installed"] = "Installed program changes",
             ["devices"] = "Installed device changes",
+            ["winext"] = "File Explorer shell extensions",
             ["events"] = "Recent system & security events",
             ["firewall"] = "Windows Firewall configuration",
             ["restores"] = "System Restore points",

@@ -24,7 +24,7 @@ namespace BrowseSafe
         private static readonly string[] TestHosts =
         {
             "www.google.com",
-            "www.yahoo.com",
+            "youtube.com",
             "www.cloudflare.com",
             "github.com",
             "www.microsoft.com",

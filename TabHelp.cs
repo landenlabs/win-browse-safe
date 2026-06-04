@@ -200,6 +200,34 @@ namespace BrowseSafe
             "- Right-click a row to analyse just that driver's INF.\n" +
             "\n" + Common);
 
+        public static readonly HelpInfo WinExt = new("File Explorer Shell Extensions",
+            "# What this shows\n" +
+            "Third-party File Explorer shell extensions - COM handlers that Windows loads in-process into " +
+            "explorer.exe (context menus, icon overlays, property sheets, drag-drop and copy hooks). Each " +
+            "row is one extension (CLSID), resolved to the DLL that backs it. A malicious or buggy handler " +
+            "runs with Explorer, so this is a useful place to spot unwanted hooks.\n" +
+            "\n" +
+            "# Status\n" +
+            "- Alert  - the DLL loads from a temp / download / AppData location, or (after verifying) is " +
+            "unsigned/invalid and not from Microsoft.\n" +
+            "- Review - the handler is not on the Windows 'Approved' shell-extensions list, or its DLL is " +
+            "missing (orphaned registration).\n" +
+            "- OK     - a normal handler.\n" +
+            "\n" +
+            "# Columns\n" +
+            "- Type / Target - the hook kind and what it hooks (all files, Directory, Drive, ...).\n" +
+            "- Signed - blank until you run Verify signatures; then Valid / NotSigned / etc.\n" +
+            "- DLL path / CLSID - the backing binary and its class id (resolved from InprocServer32).\n" +
+            "\n" +
+            "# Special actions\n" +
+            "- All - off by default to show only third-party handlers; turn it on to include the many " +
+            "Microsoft / built-in extensions.\n" +
+            "- Verify signatures - checks each handler DLL's Authenticode signature (on demand, since it's " +
+            "slow) and turns unsigned non-Microsoft handlers red.\n" +
+            "- Right-click a row to open the DLL location, copy the CLSID/path, verify it or look it up on " +
+            "VirusTotal, or search the web.\n" +
+            "\n" + Common);
+
         public static readonly HelpInfo Events = new("Windows Events",
             "# What this shows\n" +
             "Recent significant Windows Event Log entries: Critical/Error from the System and Application logs, " +

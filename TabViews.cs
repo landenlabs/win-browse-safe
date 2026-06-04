@@ -1197,6 +1197,94 @@ namespace BrowseSafe
             menu.Show(Cursor.Position);
         }
 
+        // ---- Win Extn: File Explorer shell extensions -------------------- //
+        public static Control BuildWinExt()
+        {
+            var cols = new[]
+            {
+                new GridColumn { Header = "Status", Width = 80,
+                    Text = o => WinExtStatusLabel((ShellExtension)o),
+                    Sort = o => (int)((ShellExtension)o).Risk,
+                    Style = o => WinExtStyle((ShellExtension)o) },
+                new GridColumn { Header = "Signed", Width = 80, Text = o => ((ShellExtension)o).SignStatus },
+                new GridColumn { Header = "Type", Width = 110, Text = o => ((ShellExtension)o).Types },
+                new GridColumn { Header = "Target", Width = 110, Text = o => ((ShellExtension)o).Targets },
+                new GridColumn { Header = "Name", Fill = 150, Text = o => ((ShellExtension)o).Name },
+                new GridColumn { Header = "Company", Width = 150, Text = o => ((ShellExtension)o).Company },
+                new GridColumn { Header = "DLL path", Fill = 170, Text = o => ((ShellExtension)o).DllPath },
+                new GridColumn { Header = "CLSID", Width = 150, Text = o => ((ShellExtension)o).Clsid },
+            };
+
+            SortableGrid grid = null!;
+            grid = new SortableGrid("Refresh",
+                () => SafetyChecks.GetShellExtensions().Cast<object>().ToList(),
+                cols, defaultSortColumn: 0, defaultAscending: false,
+                extraButtons: new (string, Action)[] { ("Verify signatures", () => _ = VerifyWinExt(grid)) },
+                help: TabHelp.WinExt,
+                severity: items =>
+                {
+                    var s = TabSeverity.None;
+                    foreach (var o in items)
+                        if (o is ShellExtension e) s = Sev.Max(s, e.Risk);
+                    return s;
+                },
+                onRowContext: o => ShowWinExtMenu(grid, (ShellExtension)o),
+                showAllToggle: ("All",
+                    "Off: third-party handlers only.  On: include Microsoft / built-in shell extensions.",
+                    o => ((ShellExtension)o).IsBuiltin));
+            return grid;
+        }
+
+        private static string WinExtStatusLabel(ShellExtension e) => e.Risk switch
+        {
+            TabSeverity.Alert => "Alert",
+            TabSeverity.Caution => "Review",
+            _ => "OK",
+        };
+
+        private static (Color Back, Color Fore)? WinExtStyle(ShellExtension e) => e.Risk switch
+        {
+            TabSeverity.Alert => (RedBack, RedFore),
+            TabSeverity.Caution => (YelBack, YelFore),
+            _ => null,
+        };
+
+        private static async Task VerifyWinExt(SortableGrid grid)
+        {
+            var exts = grid.Items.OfType<ShellExtension>().ToList();
+            if (exts.Count == 0) { grid.SetStatus("Nothing to verify - click Refresh."); return; }
+            grid.SetStatus("Verifying handler signatures …");
+            int flagged = await Task.Run(() =>
+            {
+                SafetyChecks.VerifyShellExtensions(exts);
+                return exts.Count(e => e.Risk >= TabSeverity.Alert);
+            });
+            grid.RefreshDisplay();
+            grid.SetStatus($"Verified {exts.Count} handler(s) - {flagged} unsigned/invalid flagged.");
+        }
+
+        private static void ShowWinExtMenu(SortableGrid grid, ShellExtension e)
+        {
+            bool hasDll = e.DllPath.Length > 0;
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Open DLL location", null,
+                (_, _) => OpenLocation(grid, e.DllPath, System.IO.Path.GetDirectoryName(e.DllPath) ?? ""))
+                .Enabled = hasDll && File.Exists(e.DllPath);
+            menu.Items.Add("Copy CLSID", null, (_, _) => { try { Clipboard.SetText(e.Clsid); } catch { } });
+            menu.Items.Add("Copy DLL path", null, (_, _) => { try { Clipboard.SetText(e.DllPath); } catch { } })
+                .Enabled = hasDll;
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Verify signature / VirusTotal", null,
+                (_, _) => ShowScanMenu(grid, e.Name, () => File.Exists(e.DllPath) ? e.DllPath : null))
+                .Enabled = hasDll;
+            menu.Items.Add("Search web for this CLSID", null, (_, _) =>
+            {
+                string q = HttpUtility.UrlEncode(e.Clsid + " shell extension");
+                OpenBrowser($"https://www.google.com/search?q={q}");
+            });
+            menu.Show(Cursor.Position);
+        }
+
         // ---- Shared helpers ---------------------------------------------- //
         private static TabSeverity WorstDays(System.Collections.Generic.IReadOnlyList<object> items, Func<object, int?> days)
         {
