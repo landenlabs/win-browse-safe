@@ -53,6 +53,9 @@ namespace BrowseSafe
         private readonly Action<object>? _onRowContext;
         private readonly CheckBox? _toggle;
         private readonly Func<object, bool>? _hideWhenOff;
+        // Extra toolbar buttons, keyed by label, so callers can enable/disable one
+        // (e.g. disable "Remove unsupported" while a removal is in flight).
+        private readonly Dictionary<string, Button> _extraButtons = new();
 
         public TabSeverity Severity { get; private set; } = TabSeverity.None;
         public event Action? SeverityChanged;
@@ -160,6 +163,7 @@ namespace BrowseSafe
                     };
                     b.Click += (_, _) => onClick();
                     top.Controls.Add(b);
+                    _extraButtons[label] = b;
                     x += b.Width + 6;
                 }
             }
@@ -373,6 +377,12 @@ namespace BrowseSafe
 
         public void SetStatus(string text) => _status.Text = text;
 
+        /// <summary>Enables or disables an extra toolbar button by its label (no-op if unknown).</summary>
+        public void SetExtraButtonEnabled(string label, bool enabled)
+        {
+            if (_extraButtons.TryGetValue(label, out var b)) b.Enabled = enabled;
+        }
+
         /// <summary>Keeps the Help button pinned to the right edge of the toolbar.</summary>
         private void LayoutHelp()
         {
@@ -543,7 +553,7 @@ namespace BrowseSafe
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, $"Could not open '{uri}': {ex.Message}", "Browse Safe",
+                CopyableMessageBox.Show(this, $"Could not open '{uri}': {ex.Message}", "Browse Safe",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -781,11 +791,29 @@ namespace BrowseSafe
             }
             UpdateSortGlyphs();
             _grid.ResumeLayout();
+            AdjustColumnWidthsForScroll();
 
             if (_filterCount != null)
             {
                 _filterCount.Text = shown == total ? $"{total} shown" : $"showing {shown} of {total}";
                 LayoutFilterBar();
+            }
+        }
+
+        /// <summary>
+        /// Makes the grid scroll horizontally rather than silently truncate. Each column's
+        /// MinimumWidth is set to the width its content needs (header + widest visible cell), so a
+        /// Fill column still spreads to fill spare room but never shrinks below its content. When
+        /// the columns together no longer fit, the grid's built-in horizontal scrollbar appears.
+        /// Recomputed on every Populate so it tracks the current rows, filter, and font scale.
+        /// </summary>
+        private void AdjustColumnWidthsForScroll()
+        {
+            foreach (DataGridViewColumn col in _grid.Columns)
+            {
+                // Width needed to show this column's header and every visible cell in full.
+                int preferred = col.GetPreferredWidth(DataGridViewAutoSizeColumnMode.AllCells, fixedHeight: true);
+                col.MinimumWidth = Math.Max(24, preferred);
             }
         }
 

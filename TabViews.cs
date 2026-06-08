@@ -243,7 +243,63 @@ namespace BrowseSafe
                 var search = new ToolStripMenuItem("Search web ", null, (_, _) => SearchFor(owner, inst.Name)) { Enabled = enabled };
                 menu.Items.Add(search);
             }
+
+            // winget package details (works for any row: by Id when known, else by name lookup).
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Show winget info", null, (_, _) => ShowWingetInfo(owner, inst));
+
+            // winget update - enabled only when winget knows the package AND reports a newer version.
+            bool canUpdate = inst.WingetId.Length > 0 && inst.HasUpdate;
+            string updLabel = inst.HasUpdate ? $"Update to v{inst.AvailableVersion} (winget)" : "Update (winget)";
+            var update = new ToolStripMenuItem(updLabel, null, (_, _) => ShowUpdateWithWinget(owner, inst))
+            {
+                Enabled = canUpdate,
+                ToolTipText = canUpdate ? "" :
+                    inst.WingetId.Length == 0 ? "No winget package is associated with this program."
+                                              : "winget reports no available update.",
+            };
+            menu.Items.Add(update);
+
             menu.Show(Cursor.Position);
+        }
+
+        /// <summary>Confirms, then runs `winget upgrade` for the program (off the UI thread) and
+        /// reports the result in a selectable, non-blocking dialog, refreshing the tab afterwards.</summary>
+        private static async void ShowUpdateWithWinget(Control owner, InstalledProgram inst)
+        {
+            var form = owner.FindForm();
+            var grid = owner as SortableGrid;
+
+            string change = inst.AvailableVersion.Length > 0
+                ? $"from v{inst.Version} to v{inst.AvailableVersion}"
+                : "to the latest version";
+            var confirm = await CopyableMessageBox.ShowAsync(form,
+                $"Update \"{inst.Name}\" {change} using winget?\n\n" +
+                "winget will download and install the update silently. Close the program first if it is " +
+                "running. A machine-wide package may prompt for administrator rights.",
+                "Update with winget", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (confirm != DialogResult.Yes) return;
+
+            grid?.SetStatus($"Updating \"{inst.Name}\" with winget … (this can take a while)");
+            string result = await Task.Run(() => SafetyChecks.WingetUpgrade(inst.WingetId, inst.Name, inst.Source));
+            grid?.SetStatus($"winget update finished for \"{inst.Name}\".");
+
+            CopyableMessageBox.Show(form, result, $"winget update - {inst.Name}",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+            if (grid != null) await grid.RunAsync();   // refresh Version / Available columns
+        }
+
+        /// <summary>Queries `winget show` for the program (off the UI thread) and presents the
+        /// details in a selectable, non-blocking dialog.</summary>
+        private static async void ShowWingetInfo(Control owner, InstalledProgram inst)
+        {
+            var grid = owner as SortableGrid;
+            grid?.SetStatus($"Querying winget for \"{inst.Name}\" …");
+            string text = await Task.Run(() => SafetyChecks.WingetShow(inst.WingetId, inst.Name, inst.Source));
+            grid?.SetStatus($"winget info shown for \"{inst.Name}\".");
+            CopyableMessageBox.Show(owner.FindForm(), text, $"winget info - {inst.Name}",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         // ---- Links: render the links.html file in a browser control ----- //
@@ -532,7 +588,7 @@ namespace BrowseSafe
             var icon = a.Risk == TabSeverity.Alert ? MessageBoxIcon.Warning
                      : a.Risk == TabSeverity.Caution ? MessageBoxIcon.Exclamation
                      : MessageBoxIcon.Information;
-            MessageBox.Show(owner.FindForm(), sb.ToString(), $"INF analysis - {a.RiskLabel}",
+            CopyableMessageBox.Show(owner.FindForm(), sb.ToString(), $"INF analysis - {a.RiskLabel}",
                 MessageBoxButtons.OK, icon);
         }
 
@@ -571,7 +627,7 @@ namespace BrowseSafe
             grid = new SortableGrid("Refresh",
                 () => SafetyChecks.GetChromeExtensions().Where(e => e.Enabled).Cast<object>().ToList(),
                 cols, defaultSortColumn: 2, defaultAscending: true,
-                extraButtons: new (string, Action)[] { ("Remove unsupported", () => RemoveUnsupportedExtensions(grid)) },
+                extraButtons: new (string, Action)[] { (RemoveExtBtnLabel, () => RemoveUnsupportedExtensions(grid)) },
                 help: TabHelp.Chrome,
                 headerInfo: SafetyChecks.CheckChromeHeader,
                 headerHeight: 174,
@@ -591,65 +647,90 @@ namespace BrowseSafe
             return grid;
         }
 
+        private const string RemoveExtBtnLabel = "Remove unsupported";
+
         /// <summary>
         /// Backs up every Chrome extension to a zip in Downloads, then (after confirmation)
         /// deletes the folders of all Manifest-V2 "Unsupported" extensions. Backup is best-effort;
         /// if it fails the user is asked whether to proceed without one.
+        /// The Remove button is disabled for the whole run (re-enabled in the finally) so a
+        /// second removal can't be started while this one - including its modeless prompts - is pending.
         /// </summary>
         private static async void RemoveUnsupportedExtensions(SortableGrid grid)
         {
             var form = grid.FindForm();
-
-            var all = await Task.Run(() => SafetyChecks.GetChromeExtensions());
-            var unsupported = all.Where(e => e.Unsupported).ToList();
-            if (unsupported.Count == 0)
+            grid.SetExtraButtonEnabled(RemoveExtBtnLabel, false);
+            try
             {
-                MessageBox.Show(form, "No unsupported (Manifest V2) extensions were found.",
-                    "Remove unsupported extensions", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
+                // Chrome's per-profile extension folders are read/write protected to an
+                // unelevated process on some systems, so both the backup and the deletion
+                // fail with "access denied". Require admin up front and point at the relaunch.
+                if (!Elevation.IsAdmin)
+                {
+                    CopyableMessageBox.Show(form,
+                        "Removing Chrome extensions requires administrator rights.\n\n" +
+                        "Chrome's extension folders are protected, so without elevation the backup " +
+                        "and the deletion both fail with \"access denied\".\n\n" +
+                        "Click the \"Run as Admin\" button in the left side toolbar, then run Remove again.",
+                        "Administrator required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var all = await Task.Run(() => SafetyChecks.GetChromeExtensions());
+                var unsupported = all.Where(e => e.Unsupported).ToList();
+                if (unsupported.Count == 0)
+                {
+                    CopyableMessageBox.Show(form, "No unsupported (Manifest V2) extensions were found.",
+                        "Remove unsupported extensions", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                string list = string.Join("\n", unsupported.Take(20)
+                    .Select(e => $"   - {e.Name}  (v{e.Version})  [{e.ProfileName}]"));
+                if (unsupported.Count > 20) list += $"\n   ...and {unsupported.Count - 20} more";
+
+                string prompt =
+                    $"Remove {unsupported.Count} unsupported extension(s)?\n\n{list}\n\n" +
+                    $"First, all {all.Count} extension(s) will be backed up to:\n" +
+                    "   Downloads\\bsafe-extension-backup.zip\n\n" +
+                    "Close Chrome first for a clean removal. This permanently deletes the extension folders.";
+                if (await CopyableMessageBox.ShowAsync(form, prompt, "Remove unsupported extensions",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                    return;
+
+                // 1) Backup (best-effort).
+                grid.SetStatus("Backing up extensions ...");
+                var (zipPath, zipCount, backupErr) = await Task.Run(() => SafetyChecks.BackupExtensions(all));
+
+                if (backupErr != null)
+                {
+                    var choice = await CopyableMessageBox.ShowAsync(form,
+                        $"The backup could not be created:\n   {backupErr}\n\nDelete the unsupported extensions anyway, WITHOUT a backup?",
+                        "Backup failed", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                    if (choice != DialogResult.Yes) { grid.SetStatus("Cancelled - nothing removed."); return; }
+                }
+
+                // 2) Delete the unsupported extension folders.
+                grid.SetStatus("Removing unsupported extensions ...");
+                var (deleted, failed, errors) = await Task.Run(() => SafetyChecks.DeleteExtensionDirs(unsupported));
+
+                // 3) Report and refresh.
+                string summary = $"Removed {deleted} of {unsupported.Count} unsupported extension(s).";
+                if (backupErr == null) summary += $"\nBackup: {zipCount} extension(s) saved to\n   {zipPath}";
+                else summary += "\nNo backup was created.";
+                if (failed > 0)
+                    summary += $"\n\n{failed} could not be removed (Chrome may be running):\n   " +
+                               string.Join("\n   ", errors.Take(8));
+
+                CopyableMessageBox.Show(form, summary, "Remove unsupported extensions",
+                    MessageBoxButtons.OK, failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+
+                await grid.RunAsync();
             }
-
-            string list = string.Join("\n", unsupported.Take(20)
-                .Select(e => $"   - {e.Name}  (v{e.Version})  [{e.ProfileName}]"));
-            if (unsupported.Count > 20) list += $"\n   ...and {unsupported.Count - 20} more";
-
-            string prompt =
-                $"Remove {unsupported.Count} unsupported extension(s)?\n\n{list}\n\n" +
-                $"First, all {all.Count} extension(s) will be backed up to:\n" +
-                "   Downloads\\bsafe-extension-backup.zip\n\n" +
-                "Close Chrome first for a clean removal. This permanently deletes the extension folders.";
-            if (MessageBox.Show(form, prompt, "Remove unsupported extensions",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
-                return;
-
-            // 1) Backup (best-effort).
-            grid.SetStatus("Backing up extensions ...");
-            var (zipPath, zipCount, backupErr) = await Task.Run(() => SafetyChecks.BackupExtensions(all));
-
-            if (backupErr != null)
+            finally
             {
-                var choice = MessageBox.Show(form,
-                    $"The backup could not be created:\n   {backupErr}\n\nDelete the unsupported extensions anyway, WITHOUT a backup?",
-                    "Backup failed", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-                if (choice != DialogResult.Yes) { grid.SetStatus("Cancelled - nothing removed."); return; }
+                grid.SetExtraButtonEnabled(RemoveExtBtnLabel, true);
             }
-
-            // 2) Delete the unsupported extension folders.
-            grid.SetStatus("Removing unsupported extensions ...");
-            var (deleted, failed, errors) = await Task.Run(() => SafetyChecks.DeleteExtensionDirs(unsupported));
-
-            // 3) Report and refresh.
-            string summary = $"Removed {deleted} of {unsupported.Count} unsupported extension(s).";
-            if (backupErr == null) summary += $"\nBackup: {zipCount} extension(s) saved to\n   {zipPath}";
-            else summary += "\nNo backup was created.";
-            if (failed > 0)
-                summary += $"\n\n{failed} could not be removed (Chrome may be running):\n   " +
-                           string.Join("\n   ", errors.Take(8));
-
-            MessageBox.Show(form, summary, "Remove unsupported extensions",
-                MessageBoxButtons.OK, failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
-
-            await grid.RunAsync();
         }
         private static void ShowChromeMenu(Control owner, ChromeExtension ext) {
             string exeDir = ext.ProfileDir;
@@ -687,14 +768,14 @@ namespace BrowseSafe
                 severity: items => WorstDays(items, o => (o as ServiceInfo)?.DaysOld),
                 onRowContext: o => ShowServiceMenu(grid, (ServiceInfo)o),
                 showAllToggle: ("All",
-                    "Off: hide old C:\\Windows\\system32 services to reduce noise.  On: show every installed service.",
+                    "Off: hide recent C:\\Windows\\system32 services to reduce noise.  On: show every installed service.",
                     o =>
                 {
                     var s = (ServiceInfo)o;
                     string path = s.ExePath.Length > 0 ? s.ExePath : s.PathRaw;
                     bool system32 = path.IndexOf(@"C:\WINDOWS\system32", StringComparison.OrdinalIgnoreCase) >= 0;
                     bool old = s.DaysOld is >= 30;   // "Old" per the recency rules
-                    return system32 && old;          // hidden when the All toggle is off
+                    return system32 && !old;         // hidden when the All toggle is off
                 }));
             return grid;
         }
@@ -719,7 +800,7 @@ namespace BrowseSafe
             try { Process.Start(new ProcessStartInfo("services.msc") { UseShellExecute = true }); }
             catch (Exception ex)
             {
-                MessageBox.Show(owner.FindForm(), "Could not open Services console: " + ex.Message,
+                CopyableMessageBox.Show(owner.FindForm(), "Could not open Services console: " + ex.Message,
                     "Services", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -733,12 +814,12 @@ namespace BrowseSafe
                 else if (Directory.Exists(svc.Dir))
                     Process.Start(new ProcessStartInfo("explorer.exe", $"\"{svc.Dir}\"") { UseShellExecute = true });
                 else
-                    MessageBox.Show(owner.FindForm(), "The service's folder could not be located.",
+                    CopyableMessageBox.Show(owner.FindForm(), "The service's folder could not be located.",
                         "Services", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show(owner.FindForm(), "Could not open the folder: " + ex.Message,
+                CopyableMessageBox.Show(owner.FindForm(), "Could not open the folder: " + ex.Message,
                     "Services", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -831,12 +912,12 @@ namespace BrowseSafe
                 else if (dir.Length > 0 && Directory.Exists(dir))
                     Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = true });
                 else
-                    MessageBox.Show(owner.FindForm(), "The file location could not be determined.",
+                    CopyableMessageBox.Show(owner.FindForm(), "The file location could not be determined.",
                         "Startup", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show(owner.FindForm(), "Could not open location: " + ex.Message,
+                CopyableMessageBox.Show(owner.FindForm(), "Could not open location: " + ex.Message,
                     "Startup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -846,7 +927,7 @@ namespace BrowseSafe
             try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true }); }
             catch (Exception ex)
             {
-                MessageBox.Show(owner.FindForm(), $"Could not open '{target}': {ex.Message}",
+                CopyableMessageBox.Show(owner.FindForm(), $"Could not open '{target}': {ex.Message}",
                     "Startup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -1110,10 +1191,10 @@ namespace BrowseSafe
                 }
                 else
                 {
-                    MessageBox.Show(output, $"Event {e.EventId} details", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    CopyableMessageBox.Show(output, $"Event {e.EventId} details", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
-            catch { try { MessageBox.Show(output, $"Event {e.EventId} details", MessageBoxButtons.OK, MessageBoxIcon.Information); } catch { } }
+            catch { try { CopyableMessageBox.Show(output, $"Event {e.EventId} details", MessageBoxButtons.OK, MessageBoxIcon.Information); } catch { } }
         }
 
         // ---- DNS: resolver cache ----------------------------------------- //
@@ -1263,7 +1344,7 @@ namespace BrowseSafe
             var lookup = new ToolStripMenuItem("Look up vendor (macvendors.com)", null, async (_, _) =>
             {
                 string vendor = await Task.Run(() => SafetyChecks.LookupVendor(e.Oui));
-                MessageBox.Show(owner.FindForm(),
+                CopyableMessageBox.Show(owner.FindForm(),
                     vendor.Length > 0 ? $"{e.Mac}\nOUI {e.Oui}\n\nVendor: {vendor}"
                                       : $"{e.Mac}\nOUI {e.Oui}\n\nNo vendor found (or lookup was rate-limited).",
                     "MAC vendor", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1477,7 +1558,7 @@ namespace BrowseSafe
             grid.SetStatus($"{name}: {status}");
 
             string signerShort = signer.Length > 0 ? signer.Split(',')[0] : "(no signer)";
-            MessageBox.Show(grid.FindForm(),
+            CopyableMessageBox.Show(grid.FindForm(),
                 $"{name}\n{exe}\n\nWinVerifyTrust status: {status}\nSigner: {signerShort}",
                 "Signature verification", MessageBoxButtons.OK,
                 status == "Valid" ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
@@ -1504,7 +1585,7 @@ namespace BrowseSafe
         private static string? ExistingPath(string path) => path.Length > 0 && File.Exists(path) ? path : null;
 
         private static void Info(Control owner, string msg) =>
-            MessageBox.Show(owner.FindForm(), msg, "Scan", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            CopyableMessageBox.Show(owner.FindForm(), msg, "Scan", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
         private static void OpenAppsSettings()
         {

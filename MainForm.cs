@@ -251,7 +251,7 @@ namespace BrowseSafe
                 Cursor = Cursors.Hand,
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
             };
-            aboutButton.Click += (_, _) => { try { var f = new AboutForm(); f.Show(); } catch { MessageBox.Show(this, "Browse Safe - Chrome Safety Check\n\nA small tool to inspect Chrome, extensions, and local system indicators relevant to browsing safety.", "About Browse Safe", MessageBoxButtons.OK, MessageBoxIcon.Information); } };
+            aboutButton.Click += (_, _) => { try { var f = new AboutForm(); f.Show(); } catch { CopyableMessageBox.Show(this, "Browse Safe - Chrome Safety Check\n\nA small tool to inspect Chrome, extensions, and local system indicators relevant to browsing safety.", "About Browse Safe", MessageBoxButtons.OK, MessageBoxIcon.Information); } };
             tip.SetToolTip(aboutButton, "About Browse Safe");
 
             _leftBottom.Controls.Add(themeIcon);
@@ -624,7 +624,7 @@ namespace BrowseSafe
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "Could not build report: " + ex.Message, "Copy report",
+                CopyableMessageBox.Show(this, "Could not build report: " + ex.Message, "Copy report",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             finally
@@ -654,7 +654,7 @@ namespace BrowseSafe
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "Could not build report: " + ex.Message, "Print report",
+                CopyableMessageBox.Show(this, "Could not build report: " + ex.Message, "Print report",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             finally
@@ -703,7 +703,7 @@ namespace BrowseSafe
             try { doc.Print(); }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "Print failed: " + ex.Message, "Print report",
+                CopyableMessageBox.Show(this, "Print failed: " + ex.Message, "Print report",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -746,7 +746,7 @@ namespace BrowseSafe
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, $"Could not open '{uri}': {ex.Message}",
+                CopyableMessageBox.Show(this, $"Could not open '{uri}': {ex.Message}",
                     "Browse Safe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -765,7 +765,7 @@ namespace BrowseSafe
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show(this, "Could not launch Chrome: " + ex.Message,
+                    CopyableMessageBox.Show(this, "Could not launch Chrome: " + ex.Message,
                         "Browse Safe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }

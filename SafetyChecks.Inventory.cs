@@ -861,6 +861,7 @@ namespace BrowseSafe
                     var p = list[r];
                     if (p.Source.Length == 0) p.Source = wr.Source;
                     if (p.AvailableVersion.Length == 0) p.AvailableVersion = wr.Available;
+                    if (p.WingetId.Length == 0) p.WingetId = StripEllipsis(wr.Id);
                     consumed[w] = true;
                     break;
                 }
@@ -876,6 +877,7 @@ namespace BrowseSafe
                     Name = wr.Name,
                     Version = wr.Version,
                     Source = wr.Source,
+                    WingetId = StripEllipsis(wr.Id),
                     AvailableVersion = wr.Available,
                     FromWinget = true,
                     InstallDate = null,

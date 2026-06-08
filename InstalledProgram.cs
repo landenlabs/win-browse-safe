@@ -32,6 +32,10 @@ namespace BrowseSafe
         /// <summary>winget package source (winget / msstore / ...), or "" when unknown.</summary>
         public string Source = "";
 
+        /// <summary>winget package Id (ellipsis stripped), or "" when not matched to a winget package.
+        /// Used by the "Show winget info" action to query <c>winget show --id</c>.</summary>
+        public string WingetId = "";
+
         /// <summary>Pending update version reported by winget's "Available" column, or "" if none.</summary>
         public string AvailableVersion = "";
 

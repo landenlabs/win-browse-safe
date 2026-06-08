@@ -397,7 +397,7 @@ namespace BrowseSafe
             try { Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true }); }
             catch (Exception ex)
             {
-                MessageBox.Show(this, $"Could not open '{uri}': {ex.Message}",
+                CopyableMessageBox.Show(this, $"Could not open '{uri}': {ex.Message}",
                     "Browse Safe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -414,7 +414,7 @@ namespace BrowseSafe
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "Could not open hosts folder: " + ex.Message,
+                CopyableMessageBox.Show(this, "Could not open hosts folder: " + ex.Message,
                     "Browse Safe", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }

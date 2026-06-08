@@ -21,7 +21,7 @@ namespace BrowseSafe
             try { report = await Task.Run(() => Reports.Build(scope)); }
             catch (Exception ex)
             {
-                MessageBox.Show(owner, "Could not build report: " + ex.Message, "Email report",
+                CopyableMessageBox.Show(owner, "Could not build report: " + ex.Message, "Email report",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -67,7 +67,7 @@ namespace BrowseSafe
                 try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } // default browser
                 catch (Exception ex)
                 {
-                    MessageBox.Show(owner, "Could not open Chrome: " + ex.Message, "Email report",
+                    CopyableMessageBox.Show(owner, "Could not open Chrome: " + ex.Message, "Email report",
                         MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }

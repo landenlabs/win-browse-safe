@@ -12,7 +12,7 @@ namespace BrowseSafe
     /// blank lines are preserved. http(s) URLs are auto-detected and clickable.</summary>
     public sealed record HelpInfo(string Title, string Body);
 
-    /// <summary>Shared "Help" button factory and the modal description dialog it opens.
+    /// <summary>Shared "Help" button factory and the modeless description dialog it opens.
     /// Reused by every tab (grids, the scan view, the firewall and links panels).</summary>
     public static class HelpUi
     {
@@ -28,19 +28,28 @@ namespace BrowseSafe
                 FlatStyle = FlatStyle.System,
                 Font = new Font("Segoe UI", 9f),
             };
-            btn.Click += (_, _) => Show(btn.FindForm(), info);
+            // Disable the button while its (modeless) dialog is open so a second copy can't be
+            // opened; re-enable when that dialog closes. Covers every tab's Help button for free.
+            btn.Click += (_, _) =>
+            {
+                btn.Enabled = false;
+                var dlg = Show(btn.FindForm(), info);
+                dlg.FormClosed += (_, _) => { if (!btn.IsDisposed) btn.Enabled = true; };
+            };
             return btn;
         }
 
-        /// <summary>Shows a theme-aware, modal, resizable dialog describing a tab.</summary>
-        public static void Show(IWin32Window? owner, HelpInfo info)
+        /// <summary>Shows a theme-aware, modeless, resizable dialog describing a tab. Modeless so it
+        /// never blocks the tab or main window - the user can keep working with Help left open.
+        /// Returns the dialog so the caller can react to it closing (e.g. re-enable its button).</summary>
+        public static Form Show(IWin32Window? owner, HelpInfo info)
         {
-            using var dlg = new Form
+            var dlg = new Form
             {
                 Text = info.Title,
                 Size = new Size(660, 540),
                 MinimumSize = new Size(420, 320),
-                StartPosition = owner != null ? FormStartPosition.CenterParent : FormStartPosition.CenterScreen,
+                StartPosition = FormStartPosition.CenterScreen,   // overridden to centre on owner below
                 FormBorderStyle = FormBorderStyle.Sizable,
                 ShowInTaskbar = false,
                 MaximizeBox = true,
@@ -100,8 +109,20 @@ namespace BrowseSafe
             close.Left = bottom.ClientSize.Width - close.Width - 12;
             close.Top = (bottom.ClientSize.Height - close.Height) / 2;
 
-            if (owner is Form f) dlg.ShowDialog(f);
-            else dlg.ShowDialog();
+            // Modeless: the Help window must NOT block its tab or the main window. It is owned by
+            // the parent (stays above it, closes with it) and disposes itself when closed.
+            dlg.FormClosed += (_, _) => dlg.Dispose();
+            if (owner is Form f)
+            {
+                dlg.Owner = f;
+                var o = f.Bounds;
+                dlg.StartPosition = FormStartPosition.Manual;
+                dlg.Location = new Point(
+                    o.Left + (o.Width - dlg.Width) / 2,
+                    o.Top + (o.Height - dlg.Height) / 2);
+            }
+            dlg.Show();
+            return dlg;
         }
 
         // ---- Light markup renderer --------------------------------------- //
