@@ -27,8 +27,9 @@ namespace BrowseSafe
         public static string SruDbPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.System), @"sru\SRUDB.dat");
 
-        // SRUM "Network Data Usage Monitor" table - bytes sent/received per app/interval.
-        private const string SruNetTable = "{973F5D5C-251D-4F11-9B13-41B02B4C926A}";
+        // The network-data-usage table is identified by its BytesSent/BytesRecvd columns rather than
+        // a fixed name: SRUM's per-provider table GUID differs across Windows builds (e.g. it is
+        // {973F5D5C-251D-...} in published references but {973F5D5C-1D90-...} on some Win11 builds).
 
         // Short-lived memo so the tab's summary + loader (back-to-back) don't each re-copy/parse.
         private static readonly object _sruLock = new();
@@ -77,11 +78,13 @@ namespace BrowseSafe
             {
                 Directory.CreateDirectory(workDir);
 
-                // Snapshot the live, locked database (esentutl /y uses the ESE backup path).
-                if (!RunEsentutl($"/y \"{SruDbPath}\" /d \"{copy}\"", out string copyErr) || !File.Exists(copy))
+                // Snapshot the live database. esentutl /y can often copy it directly even though
+                // the Diagnostic Policy Service holds it open; when the live file is locked
+                // (JET_errFileAccessDenied) we retry through a VSS snapshot, which reads a frozen
+                // copy of the volume and is the reliable way to grab an in-use system database.
+                if (!TryCopySru(copy, out string copyErr))
                 {
-                    SruStatus = "Could not copy SRUDB.dat with esentutl." +
-                        (copyErr.Length > 0 ? "  " + copyErr : "");
+                    SruStatus = "Could not copy SRUDB.dat with esentutl.  " + copyErr;
                     return empty;
                 }
 
@@ -115,7 +118,36 @@ namespace BrowseSafe
             }
         }
 
-        /// <summary>Runs esentutl.exe with the given arguments, hidden, capturing stderr.</summary>
+        /// <summary>Copies the live SRUDB.dat to <paramref name="dest"/>: first a direct esentutl
+        /// copy, then - if that fails (the file is usually locked by the Diagnostic Policy Service) -
+        /// a copy through a VSS snapshot. Returns false with the last esentutl diagnostic in
+        /// <paramref name="error"/>.</summary>
+        private static bool TryCopySru(string dest, out string error)
+        {
+            if (RunEsentutl($"/y \"{SruDbPath}\" /d \"{dest}\"", out error) && File.Exists(dest))
+                return true;
+            string direct = error;
+
+            // Drop any partial copy before the VSS retry.
+            try { if (File.Exists(dest)) File.Delete(dest); } catch { /* best effort */ }
+
+            if (RunEsentutl($"/y \"{SruDbPath}\" /vss /d \"{dest}\"", out string vssErr) && File.Exists(dest))
+            {
+                error = "";
+                return true;
+            }
+
+            // Prefer the VSS diagnostic when it said something; otherwise the direct-copy one.
+            error = vssErr.Length > 0 ? $"{vssErr}  (after VSS retry)" : direct;
+            return false;
+        }
+
+        /// <summary>
+        /// Runs esentutl.exe with the given arguments, hidden. esentutl writes its progress AND its
+        /// "Operation terminated with error ..." diagnostics to stdout (not stderr), so both streams
+        /// are read - concurrently, so a full pipe buffer can't deadlock the wait - and on failure the
+        /// most relevant line is returned via <paramref name="error"/>.
+        /// </summary>
         private static bool RunEsentutl(string args, out string error)
         {
             error = "";
@@ -132,13 +164,38 @@ namespace BrowseSafe
                 using var p = Process.Start(psi);
                 if (p == null) { error = "esentutl did not start"; return false; }
                 try { p.StandardInput.Close(); } catch { }
-                string err = p.StandardError.ReadToEnd();
-                p.WaitForExit(60_000);
-                if (!p.HasExited) { try { p.Kill(); } catch { } error = "esentutl timed out"; return false; }
-                if (p.ExitCode != 0) { error = err.Trim(); return false; }
+
+                // Drain both streams asynchronously while the process runs.
+                var outTask = p.StandardOutput.ReadToEndAsync();
+                var errTask = p.StandardError.ReadToEndAsync();
+                if (!p.WaitForExit(60_000))
+                {
+                    try { p.Kill(); } catch { }
+                    error = "esentutl timed out";
+                    return false;
+                }
+                string combined = outTask.GetAwaiter().GetResult() + "\n" + errTask.GetAwaiter().GetResult();
+                if (p.ExitCode != 0) { error = EsentErrorLine(combined); return false; }
                 return true;
             }
             catch (Exception ex) { error = ex.Message; return false; }
+        }
+
+        /// <summary>Pulls the meaningful diagnostic out of esentutl's output (its "Operation
+        /// terminated with error ...", "Usage Error ...", or "system error ..." line); falls back to
+        /// a trimmed snippet of the whole output.</summary>
+        private static string EsentErrorLine(string output)
+        {
+            foreach (var raw in output.Split('\n'))
+            {
+                string line = raw.Trim();
+                if (line.StartsWith("Operation terminated with error", StringComparison.OrdinalIgnoreCase) ||
+                    line.StartsWith("Usage Error", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("system error", StringComparison.OrdinalIgnoreCase))
+                    return line;
+            }
+            string trimmed = output.Trim();
+            return trimmed.Length > 200 ? trimmed.Substring(0, 200) + "..." : trimmed;
         }
 
         /// <summary>Reads the network table and id-map from a (clean) ESE copy and aggregates by app.</summary>
@@ -158,11 +215,29 @@ namespace BrowseSafe
             Api.JetAttachDatabase(session, dbPath, AttachDatabaseGrbit.ReadOnly);
             Api.JetOpenDatabase(session, dbPath, null, out JET_DBID dbid, OpenDatabaseGrbit.ReadOnly);
 
-            var idMap = ReadIdMap(session, dbid);
+            var tableNames = Api.GetTableNames(session, dbid).ToList();
+
+            // The id-map table has a stable name; match it tolerant of casing.
+            string? idMapTable = tableNames.FirstOrDefault(
+                t => t.Equals("SruDbIdMapTable", StringComparison.OrdinalIgnoreCase));
+
+            // Find the network-data-usage table by its COLUMNS, not by a hard-coded GUID: SRUM's
+            // per-provider table GUIDs differ across Windows builds, but the network table is always
+            // the one carrying the per-app byte counters (BytesSent + BytesRecvd). The disk table
+            // uses BytesRead/BytesWritten, so there is no ambiguity.
+            string? netTable = FindTableWithColumns(session, dbid, tableNames, "BytesSent", "BytesRecvd");
+
+            if (netTable == null || idMapTable == null)
+                throw new InvalidOperationException(
+                    (netTable == null ? "no SRUM table has BytesSent/BytesRecvd columns. " : "") +
+                    (idMapTable == null ? "SruDbIdMapTable not present. " : "") +
+                    $"Tables in copy ({tableNames.Count}): {string.Join(", ", tableNames.Take(40))}");
+
+            var idMap = ReadIdMap(session, dbid, idMapTable);
 
             // Aggregate sent/received and the newest timestamp per AppId.
             var byApp = new Dictionary<int, SruNetUsage>();
-            using (var table = new Table(session, dbid, SruNetTable, OpenTableGrbit.ReadOnly))
+            using (var table = new Table(session, dbid, netTable, OpenTableGrbit.ReadOnly))
             {
                 var cols = ColumnMap(session, table);
                 JET_COLUMNID appCol = cols["AppId"], sentCol = cols["BytesSent"],
@@ -199,10 +274,10 @@ namespace BrowseSafe
         }
 
         /// <summary>SruDbIdMapTable: IdIndex -> decoded app identity (path, or SID for user rows).</summary>
-        private static Dictionary<int, string> ReadIdMap(Session session, JET_DBID dbid)
+        private static Dictionary<int, string> ReadIdMap(Session session, JET_DBID dbid, string idMapTable)
         {
             var map = new Dictionary<int, string>();
-            using var table = new Table(session, dbid, "SruDbIdMapTable", OpenTableGrbit.ReadOnly);
+            using var table = new Table(session, dbid, idMapTable, OpenTableGrbit.ReadOnly);
             var cols = ColumnMap(session, table);
             if (!cols.TryGetValue("IdIndex", out var idxCol) || !cols.TryGetValue("IdBlob", out var blobCol))
                 return map;
@@ -217,6 +292,29 @@ namespace BrowseSafe
                 map[idx] = DecodeIdBlob(type, blob);
             }
             return map;
+        }
+
+        /// <summary>Returns the first non-system table whose columns include every name in
+        /// <paramref name="required"/> (case-insensitive), or null if none match. Used to locate the
+        /// network-usage table by its byte-counter columns instead of a build-specific GUID.</summary>
+        private static string? FindTableWithColumns(
+            Session session, JET_DBID dbid, IEnumerable<string> tableNames, params string[] required)
+        {
+            foreach (var name in tableNames)
+            {
+                // Skip ESE catalog and SRUM bookkeeping tables (MSys*, SruDbIdMapTable, ...).
+                if (name.StartsWith("MSys", StringComparison.OrdinalIgnoreCase) ||
+                    name.StartsWith("SruDb", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                try
+                {
+                    using var table = new Table(session, dbid, name, OpenTableGrbit.ReadOnly);
+                    var cols = ColumnMap(session, table);
+                    if (required.All(cols.ContainsKey)) return name;
+                }
+                catch { /* unreadable table - skip it */ }
+            }
+            return null;
         }
 
         /// <summary>App id blobs are UTF-16 strings; user rows (IdType 3) hold a binary SID.</summary>
