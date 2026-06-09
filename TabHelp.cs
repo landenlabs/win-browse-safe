@@ -294,6 +294,41 @@ namespace BrowseSafe
             "- Filter the Why column with a regular expression.\n" +
             "\n" + Common);
 
+        public static readonly HelpInfo Activity = new("App Launch Activity",
+            "# What this shows\n" +
+            "How often each app has been launched on this machine, read from Windows Search's app-usage " +
+            "index (the AppsIndex.db SQLite database Windows uses to rank Start-menu and search results). " +
+            "It surfaces what runs here and how heavily - an unfamiliar program with a high launch count, " +
+            "or one started from an unexpected location, is worth a look. Reading the index needs no " +
+            "administrator rights.\n" +
+            "\n" +
+            "# Columns\n" +
+            "- Launches - the recorded launch count (default sort, highest first).\n" +
+            "- When - the last time the app's executable ran, merged in by path from the Program " +
+            "Compatibility Assistant log (C:\\Windows\\appcompat\\pca\\PcaAppLaunchDic.txt). That log " +
+            "lives under C:\\Windows and needs administrator rights, so When is blank ('—') when the app " +
+            "is not run elevated, and for apps with no path to match (most packaged apps).\n" +
+            "- Type - Win32 (desktop / legacy app) or Packaged (Store / MSIX / UWP).\n" +
+            "- Rank - Windows Search's internal relevance rank for the tile (lower = more prominent).\n" +
+            "- App ID / path - the executable path when known (Known-Folder GUIDs are expanded), otherwise " +
+            "the raw app identifier (e.g. an AUMID for packaged apps).\n" +
+            "\n" +
+            "# Status\n" +
+            "- Review - the launched executable lives in a transient folder (Temp / Downloads), where " +
+            "legitimate installed software does not normally run from - verify it is expected.\n" +
+            "- OK     - nothing unusual.\n" +
+            "\n" +
+            "# Note\n" +
+            "The app index itself stores no timestamps - it is a frequency view. The When column is the " +
+            "only last-run signal, merged in from the separate PCA log (admin only). The database is copied " +
+            "to a temp file before reading, so Windows Search is never locked or modified. If AppsIndex.db " +
+            "is absent (older Windows builds) the tab is empty.\n" +
+            "\n" +
+            "# Special actions\n" +
+            "- Right-click a row to open the file location, copy the name / app ID / launch count, or search " +
+            "the web for the app.\n" +
+            "\n" + Common);
+
         public static readonly HelpInfo RootCerts = new("Trusted Root CAs",
             "# What this shows\n" +
             "The certificates in your trusted-root stores (Local Machine + Current User). A root CA is " +

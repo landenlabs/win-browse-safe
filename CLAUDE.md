@@ -23,7 +23,7 @@ BrowseSafe.exe --run events --out events.txt   # also write report to a file
 ```
 
 Scopes: `scan, dns, arp, patches, chrome, services, processes, startup, installed,
-devices, winext, events, firewall, restores, all` (the catalog in `Reports.cs` is the
+devices, winext, events, activity, firewall, restores, all` (the catalog in `Reports.cs` is the
 source of truth). `events` needs Administrator to read the Security log.
 
 `install.bat` publishes a self-contained single-file exe (`win-x64`) and copies it to
@@ -37,7 +37,7 @@ The whole app is built on one small data model and a central catalog:
 - **`CheckResult.cs`** — the model. `CheckStatus` enum (`Pass/Warn/Fail/Info`),
   `CheckResult` (one line: status + name + detail, or a pre-formatted `Table` row), and
   `CheckGroup` (a titled list of results; `Worst()` rolls up severity, table rows excluded).
-- **`SafetyChecks`** — all diagnostic logic, a `static partial class` split across 13
+- **`SafetyChecks`** — all diagnostic logic, a `static partial class` split across 14
   files (see below). Every public `CheckXxx()` method returns a populated `CheckGroup`
   and is safe to call from a background thread.
 - **`Reports.cs`** — central catalog mapping each scope key → its `Func<CheckGroup>[]`
@@ -79,11 +79,12 @@ The whole app is built on one small data model and a central catalog:
 | `SafetyChecks.WinExt.cs` | Shell / context-menu extensions |
 | `SafetyChecks.Firewall.cs` | Firewall state + rules |
 | `SafetyChecks.Events.cs` | Windows Event Log entries |
+| `SafetyChecks.Activity.cs` | App launch counts (Windows Search `AppsIndex.db`) + PCA last-run merge |
 | `SafetyChecks.Restore.cs` | System Restore points |
 
 ### Row model / DTO classes
 One small record-like class per item type, consumed by the grids:
-`ArpEntry`, `ChromeExtension`, `DeviceDriver`, `DnsCacheEntry`, `EventItem`,
+`AppActivity`, `ArpEntry`, `ChromeExtension`, `DeviceDriver`, `DnsCacheEntry`, `EventItem`,
 `FirewallRule`, `InstalledProgram`, `ProcessItem`, `RestorePoint`, `ServiceInfo`,
 `ShellExtension`, `StartupItem`.
 
@@ -109,4 +110,6 @@ Version lives in several places; **do not hand-edit them individually**.
 - Each check is self-contained and exception-isolated — a failing check returns a
   `Fail` result rather than throwing across the report.
 - Headless progress goes to **stderr**, the report to **stdout** (so stdout stays clean).
-- Dependencies: `System.Management` (WMI) is the only NuGet package.
+- Dependencies: `System.Management` (WMI) and `Microsoft.Data.Sqlite` (reads the Windows
+  Search `AppsIndex.db` for the Activity tab; its bundled native SQLite supplies the FTS5
+  module that database needs) are the only NuGet packages.

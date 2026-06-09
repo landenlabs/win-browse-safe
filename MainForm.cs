@@ -292,6 +292,7 @@ namespace BrowseSafe
             AddViewTab("Win Extn", "winext", TabViews.BuildWinExt());
             AddViewTab("Events", "events", TabViews.BuildEvents());
             AddViewTab("Awake", "awake", TabViews.BuildAwake());
+            AddViewTab("Activity", "activity", TabViews.BuildActivity());
             AddViewTab("Root CAs", "rootca", TabViews.BuildRootCerts());
             AddViewTab("Firewall", "firewall", TabViews.BuildFirewall());
             if (Elevation.IsAdmin)
@@ -531,6 +532,7 @@ namespace BrowseSafe
             ["winext"] = "File Explorer shell extensions",
             ["events"] = "Recent system & security events",
             ["awake"] = "Recent awake / sleep periods",
+            ["activity"] = "App launch activity",
             ["rootca"] = "Trusted root certificate authorities",
             ["firewall"] = "Windows Firewall configuration",
             ["restores"] = "System Restore points",

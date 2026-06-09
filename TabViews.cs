@@ -1014,6 +1014,80 @@ namespace BrowseSafe
             return TabSeverity.None;
         }
 
+        // ---- Activity: Windows Search app-launch index ------------------- //
+        public static Control BuildActivity()
+        {
+            SortableGrid grid = null!;
+            var cols = new[]
+            {
+                new GridColumn { Header = "Status", Width = 80,
+                    Text = o => ((AppActivity)o).Risk >= TabSeverity.Caution ? "Review" : "OK",
+                    Sort = o => (int)((AppActivity)o).Risk,
+                    Style = o => ((AppActivity)o).Risk >= TabSeverity.Caution ? ((Color, Color)?)(YelBack, YelFore) : null },
+                new GridColumn { Header = "Launches", Width = 84,
+                    Text = o => ((AppActivity)o).LaunchCount.ToString("N0"),
+                    Sort = o => ((AppActivity)o).LaunchCount },
+                new GridColumn { Header = "When", Width = 130,
+                    Text = o => ((AppActivity)o).LastExecutedText,
+                    Sort = o => ((AppActivity)o).LastExecuted ?? DateTime.MinValue },
+                new GridColumn { Header = "Type", Width = 96,
+                    Text = o => ((AppActivity)o).Kind,
+                    FilterKind = ColumnFilterKind.Dropdown },
+                new GridColumn { Header = "Rank", Width = 70,
+                    Text = o => ((AppActivity)o).CRank.ToString(),
+                    Sort = o => ((AppActivity)o).CRank },
+                new GridColumn { Header = "App name", Fill = 140, Text = o => ((AppActivity)o).DisplayName },
+                new GridColumn { Header = "App ID / path", Fill = 200,
+                    Text = o => ActivityPathText((AppActivity)o),
+                    FilterKind = ColumnFilterKind.Regex },
+            };
+
+            grid = new SortableGrid("Refresh",
+                () => SafetyChecks.GetAppActivity().Cast<object>().ToList(),
+                cols, defaultSortColumn: 1, defaultAscending: false,   // most-launched first
+                help: TabHelp.Activity,
+                summary: () =>
+                {
+                    var items = SafetyChecks.GetAppActivity();
+                    int flagged = items.Count(a => a.Risk >= TabSeverity.Caution);
+                    if (flagged > 0) return $"{flagged} launched from Temp/Downloads";
+                    return items.Count > 0 ? $"top: {items[0].DisplayName} ({items[0].LaunchCount:N0})" : "no data";
+                },
+                severity: items =>
+                {
+                    var s = TabSeverity.None;
+                    foreach (var o in items)
+                        if (o is AppActivity a) s = Sev.Max(s, a.Risk);
+                    return s;
+                },
+                onRowContext: o => ShowActivityMenu(grid, (AppActivity)o));
+            return grid;
+        }
+
+        // Prefer the resolved on-disk path; fall back to the raw appId for identifier-only tiles.
+        private static string ActivityPathText(AppActivity a)
+            => a.ResolvedPath.Length > 0 ? a.ResolvedPath : a.AppId;
+
+        private static void ShowActivityMenu(Control owner, AppActivity a)
+        {
+            string path = ActivityPathText(a);
+            bool hasFile = a.ResolvedPath.Length > 0 && File.Exists(a.ResolvedPath);
+
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Open file location", null,
+                (_, _) => OpenLocation(owner, a.ResolvedPath, Path.GetDirectoryName(a.ResolvedPath) ?? ""))
+                .Enabled = hasFile;
+            menu.Items.Add("Copy app name", null, (_, _) => { try { Clipboard.SetText(a.DisplayName); } catch { } });
+            menu.Items.Add("Copy app ID / path", null, (_, _) => { try { Clipboard.SetText(path); } catch { } });
+            menu.Items.Add("Copy launch count", null, (_, _) => { try { Clipboard.SetText(a.LaunchCount.ToString()); } catch { } });
+            menu.Items.Add("Copy last-run time", null, (_, _) => { try { Clipboard.SetText(a.LastExecutedText); } catch { } })
+                .Enabled = a.LastExecuted.HasValue;
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Search the web for this app", null, (_, _) =>
+                OpenBrowser("https://www.google.com/search?q=" + HttpUtility.UrlEncode(a.DisplayName)));
+            menu.Show(Cursor.Position);
+        }
+
         // ---- Root CAs ---------------------------------------------------- //
         public static Control BuildRootCerts()
         {

@@ -19,6 +19,9 @@
     <Description>Verifies the network and OS are in a safe state before running the Chrome browser.</Description>
     <!-- Application.SetColorMode / SystemColorMode are still experimental (WFO5001). -->
     <NoWarn>$(NoWarn);WFO5001</NoWarn>
+    <!-- Microsoft.Data.Sqlite ships a native e_sqlite3 (with the FTS5 module AppsIndex.db
+         needs); embed and self-extract it so the single-file publish (install.bat) still loads it. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,6 +31,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
 
