@@ -124,13 +124,16 @@ namespace BrowseSafe
         // ----------------------------------------------------------------- //
         public static CheckGroup CheckDnsLookups()
         {
+            if (!OutboundDnsReachable())
+                return SkippedDns("4. DNS Lookup Tests (public sites)", "the public-site lookups");
+
             var group = new CheckGroup("4. DNS Lookup Tests (public sites)");
             foreach (var host in TestHosts)
             {
                 try
                 {
                     var sw = Stopwatch.StartNew();
-                    IPAddress[] addrs = Dns.GetHostAddresses(host);
+                    IPAddress[] addrs = ResolveHost(host);
                     sw.Stop();
 
                     if (addrs.Length == 0)
@@ -170,6 +173,9 @@ namespace BrowseSafe
         // ----------------------------------------------------------------- //
         public static CheckGroup CheckEmailDns()
         {
+            if (!OutboundDnsReachable())
+                return SkippedDns("7. E-mail (MX) DNS Tests", "the e-mail (MX) lookups");
+
             var group = new CheckGroup("7. E-mail (MX) DNS Tests");
 
             foreach (var (label, domain, expectedSuffix) in EmailDomains)
@@ -207,7 +213,7 @@ namespace BrowseSafe
                     bool resolveOk = false;
                     try
                     {
-                        var addrs = Dns.GetHostAddresses(host);
+                        var addrs = ResolveHost(host);
                         resolveOk = addrs.Length > 0;
                         nonPublic = addrs.Any(a => IsPrivate(a) || IPAddress.IsLoopback(a));
                         ipText = addrs.Length > 0
@@ -263,7 +269,7 @@ namespace BrowseSafe
                 "Where-Object {$_.QueryType -eq 'MX'} | " +
                 "Select-Object Preference,NameExchange) | ConvertTo-Json -Compress -Depth 3";
 
-            var root = RunPowerShellJson(script);
+            var root = RunPowerShellJson(script, NetProbeTimeoutMs);
             if (root == null) return list;
 
             void AddOne(JsonElement e)
@@ -570,11 +576,23 @@ $r | ConvertTo-Json -Compress -Depth 5
             return RunPowerShellJson(script);
         }
 
+        /// <summary>Default cap before we kill a PowerShell probe. Inventory queries
+        /// (installed programs, services, ...) can legitimately run several seconds, so the
+        /// default stays generous; the Safety-Scan network probes pass the shorter
+        /// <see cref="NetProbeTimeoutMs"/> instead.</summary>
+        private const int DefaultPsTimeoutMs = 30000;
+
+        /// <summary>Shorter cap for the Safety-Scan network probes (DNS via PowerShell). Without
+        /// it, a query that reaches out to a public resolver rides the full default timeout when
+        /// an aggressive firewall is silently dropping the outbound packets.</summary>
+        private const int NetProbeTimeoutMs = 10000;
+
         /// <summary>
         /// Runs a PowerShell script (fed via stdin) and returns its JSON output
-        /// as a detached <see cref="JsonElement"/>, or null on any failure.
+        /// as a detached <see cref="JsonElement"/>, or null on any failure. The child is
+        /// killed if it has not finished within <paramref name="timeoutMs"/>.
         /// </summary>
-        private static JsonElement? RunPowerShellJson(string script)
+        private static JsonElement? RunPowerShellJson(string script, int timeoutMs = DefaultPsTimeoutMs)
         {
             // -EncodedCommand (base64 UTF-16LE) runs multi-line scripts reliably and
             // sidesteps stdin/quoting issues. Progress/verbose streams go to stderr,
@@ -607,7 +625,7 @@ $r | ConvertTo-Json -Compress -Depth 5
                 Task<string> outTask = proc.StandardOutput.ReadToEndAsync();
                 Task<string> errTask = proc.StandardError.ReadToEndAsync();
 
-                if (!Task.WaitAll(new Task[] { outTask, errTask }, 30000))
+                if (!Task.WaitAll(new Task[] { outTask, errTask }, timeoutMs))
                 {
                     try { proc.Kill(entireProcessTree: true); } catch { /* already exited */ }
                     return null;   // killing closes the pipes; the read tasks unblock and are dropped
@@ -710,6 +728,92 @@ $r | ConvertTo-Json -Compress -Depth 5
                 return key?.GetValue(value) as string ?? string.Empty;
             }
             catch { return string.Empty; }
+        }
+
+        // ----------------------------------------------------------------- //
+        // Bounded DNS + outbound-DNS reachability.
+        // ----------------------------------------------------------------- //
+        /// <summary>Hard cap for a single DNS resolution (getaddrinfo has no timeout of its own).</summary>
+        private const int DnsTimeoutMs = 3000;
+
+        /// <summary>
+        /// Bounded <see cref="Dns.GetHostAddresses(string)"/>. The native resolver call has no
+        /// timeout and cannot be cancelled, so it runs on the thread pool and is raced against a
+        /// deadline; on timeout we throw <see cref="TimeoutException"/> and abandon the worker
+        /// (it completes on its own). Real resolver failures (NXDOMAIN, ...) surface unchanged, so
+        /// every existing caller's catch/Warn handling still applies. Without this, a firewall
+        /// silently dropping DNS packets stalls a check for the OS resolver's full retry schedule.
+        /// </summary>
+        private static IPAddress[] ResolveHost(string host, int timeoutMs = DnsTimeoutMs)
+        {
+            var work = Task.Run(() => Dns.GetHostAddresses(host));
+            bool done;
+            try { done = work.Wait(timeoutMs); }
+            catch (AggregateException ae) { throw ae.InnerException ?? ae; }  // faulted: surface the real error
+            if (done) return work.Result;
+            Observe(work);   // abandoned worker: don't let its later fault go unobserved
+            throw new TimeoutException(
+                $"DNS lookup of {host} timed out after {timeoutMs} ms (network/DNS may be blocked).");
+        }
+
+        /// <summary>Bounded reverse lookup; returns the PTR host name, or "" on failure/timeout.</summary>
+        private static string ResolveHostNameOrEmpty(IPAddress ip, int timeoutMs = DnsTimeoutMs)
+        {
+            var work = Task.Run(() => Dns.GetHostEntry(ip).HostName);
+            try { if (work.Wait(timeoutMs)) return work.Result ?? ""; }
+            catch { /* faulted: no PTR record */ }
+            Observe(work);
+            return "";
+        }
+
+        /// <summary>Swallows the eventual exception of an abandoned (timed-out) task.</summary>
+        private static void Observe(Task t) =>
+            t.ContinueWith(static x => { _ = x.Exception; },
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+
+        // Cached so a single scan pays the (bounded) probe at most once across all DNS checks.
+        private static readonly object _reachLock = new();
+        private static bool _reachOk;
+        private static DateTime _reachAt;   // UTC of last probe; default(DateTime) forces a first probe
+
+        /// <summary>
+        /// Fast, bounded check: does outbound DNS resolve at all right now? Resolves a couple of
+        /// well-known hosts with a short per-lookup cap and caches the verdict briefly. The
+        /// DNS-dependent checks call this first and skip (rather than stall) when an aggressive
+        /// firewall or captive portal is silently dropping outbound traffic - turning a
+        /// multi-minute hang into a sub-3-second "blocked" result. Fails open on the probe's own
+        /// errors so a glitch never wrongly skips checks on a healthy network.
+        /// </summary>
+        private static bool OutboundDnsReachable()
+        {
+            lock (_reachLock)
+            {
+                if ((DateTime.UtcNow - _reachAt) < TimeSpan.FromSeconds(5)) return _reachOk;
+                _reachOk = ProbeDns();
+                _reachAt = DateTime.UtcNow;
+                return _reachOk;
+            }
+        }
+
+        private static bool ProbeDns()
+        {
+            foreach (var host in new[] { "www.google.com", "www.cloudflare.com" })
+            {
+                try { if (ResolveHost(host, 1500).Length > 0) return true; }
+                catch { /* timeout / failure - try the next */ }
+            }
+            return false;
+        }
+
+        /// <summary>The single-line "skipped because outbound DNS looks blocked" result.</summary>
+        private static CheckGroup SkippedDns(string title, string what)
+        {
+            var group = new CheckGroup(title);
+            group.Add(CheckStatus.Warn, "Skipped - outbound DNS appears blocked",
+                $"A quick DNS probe timed out, so {what} was skipped to avoid a long stall. This usually " +
+                "means a firewall (e.g. Malwarebytes), VPN filter, or captive portal is dropping outbound " +
+                "DNS. Re-run the scan once connectivity is restored.");
+            return group;
         }
 
         // ----------------------------------------------------------------- //

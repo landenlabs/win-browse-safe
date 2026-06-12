@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -40,6 +41,7 @@ namespace BrowseSafe
         private readonly bool _requiresNetwork;
         private bool _running;
         private bool _networkBlocked;
+        private CancellationTokenSource? _cts;
 
         // Inline clickable links rendered into the output (section "open settings" actions,
         // the hosts-folder link, and the offline "open network settings" link). Each region
@@ -158,6 +160,8 @@ namespace BrowseSafe
             Controls.Add(top);
 
             Controls.Add(_busy);
+            _busy.ShowCancel = true;
+            _busy.Cancelled += OnCancelRequested;
             Resize += (_, _) => CenterBusy();
 
             Theme.Changed += OnThemeChanged;
@@ -236,32 +240,80 @@ namespace BrowseSafe
             AppendLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss}", ColorInfo, FontStyle.Italic);
             AppendLine("");
 
+            _cts = new CancellationTokenSource();
+            var token = _cts.Token;
+
             CenterBusy();
             _busy.Start();
             CheckStatus overall = CheckStatus.Pass;
+            bool cancelled = false;
             try
             {
                 foreach (var (label, run) in _steps)
                 {
+                    if (token.IsCancellationRequested) { cancelled = true; break; }
                     _status.Text = $"Running {label} ...";
-                    CheckGroup g = await Task.Run(run);
+                    CheckGroup? g = await RunStepAsync(run, token);
+                    if (g == null) { cancelled = true; break; }   // cancelled mid-step
                     _lastGroups.Add(g);
                     RenderGroup(g);
                     if (CheckGroup.Rank(g.Worst()) > CheckGroup.Rank(overall))
                         overall = g.Worst();
                 }
-                _status.Text = $"Completed {DateTime.Now:HH:mm:ss}";
+
+                if (cancelled)
+                {
+                    AppendLine("");
+                    AppendLine("Scan cancelled - partial results shown above.",
+                        ColorWarn, FontStyle.Bold, 11f);
+                    _status.Text = "Cancelled";
+                }
+                else
+                {
+                    _status.Text = $"Completed {DateTime.Now:HH:mm:ss}";
+                }
             }
             finally
             {
                 _busy.Stop();
+                _cts.Dispose();
+                _cts = null;
                 HasRun = true;
                 _runButton.Enabled = true;
                 _running = false;
             }
             Severity = Sev.FromStatus(overall);
             SeverityChanged?.Invoke();
-            if (_reportVerdict) Completed?.Invoke(overall);
+            // Don't drive the overall verdict (e.g. the Launch-Chrome gate) off a partial,
+            // user-cancelled run.
+            if (!cancelled && _reportVerdict) Completed?.Invoke(overall);
+        }
+
+        /// <summary>
+        /// Runs one check on the thread pool, racing it against cancellation. A check is not
+        /// itself cancellable, but its blocking network calls are bounded by their own timeouts,
+        /// so on cancel we stop awaiting and abandon the worker - it finishes on its own within
+        /// those bounds. Returns the populated group, or null if cancelled before it completed.
+        /// </summary>
+        private static async Task<CheckGroup?> RunStepAsync(Func<CheckGroup> run, CancellationToken token)
+        {
+            var work = Task.Run(run);
+            var cancel = Task.Delay(Timeout.Infinite, token);
+            var done = await Task.WhenAny(work, cancel);
+            if (done != work)
+            {
+                // Abandoned: swallow any later fault so it isn't an unobserved task exception.
+                _ = work.ContinueWith(static t => { _ = t.Exception; },
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+                return null;
+            }
+            return await work;
+        }
+
+        private void OnCancelRequested()
+        {
+            _status.Text = "Cancelling ...";
+            _cts?.Cancel();
         }
 
         private void RenderGroup(CheckGroup group)

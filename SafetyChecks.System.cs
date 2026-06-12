@@ -111,7 +111,7 @@ namespace BrowseSafe
         {
             try
             {
-                var addrs = Dns.GetHostAddresses(server);
+                var addrs = ResolveHost(server);
                 if (addrs.Length == 0) return null;
                 IPAddress addr = addrs[0];
 

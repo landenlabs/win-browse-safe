@@ -453,6 +453,9 @@ $r | ConvertTo-Json -Compress -Depth 5
         // ----------------------------------------------------------------- //
         public static CheckGroup CheckUpstreamResolver()
         {
+            if (!OutboundDnsReachable())
+                return SkippedDns("3. Actual Upstream DNS Resolver", "upstream-resolver detection");
+
             var group = new CheckGroup("3. Actual Upstream DNS Resolver");
 
             IPAddress? configured = GetPrimaryDns();
@@ -465,9 +468,9 @@ $r | ConvertTo-Json -Compress -Depth 5
             IPAddress? egress = null;
             try
             {
-                egress = Dns.GetHostAddresses("whoami.akamai.net")
-                            .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork)
-                         ?? Dns.GetHostAddresses("whoami.akamai.net").FirstOrDefault();
+                var who = ResolveHost("whoami.akamai.net");
+                egress = who.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork)
+                         ?? who.FirstOrDefault();
             }
             catch { /* fall back to Google below */ }
 
@@ -494,8 +497,7 @@ $r | ConvertTo-Json -Compress -Depth 5
                 return group;
             }
 
-            string ptr = "";
-            try { ptr = Dns.GetHostEntry(egress).HostName; } catch { /* no PTR */ }
+            string ptr = ResolveHostNameOrEmpty(egress);
 
             string detail = egress.ToString();
             if (!string.IsNullOrEmpty(ptr)) detail += $"   ({ptr})";
@@ -583,6 +585,9 @@ $r | ConvertTo-Json -Compress -Depth 5
 
         public static CheckGroup CheckCrossResolver()
         {
+            if (!OutboundDnsReachable())
+                return SkippedDns("5. Cross-Resolver DNS Comparison", "the cross-resolver comparison");
+
             var group = new CheckGroup("5. Cross-Resolver DNS Comparison");
 
             bool wantV6 = IsIPv6Enabled();
@@ -775,7 +780,7 @@ $r | ConvertTo-Json -Compress -Depth 5
         {
             try
             {
-                return Dns.GetHostAddresses(host)
+                return ResolveHost(host)
                           .Where(a => a.AddressFamily == family)
                           .ToList();
             }
@@ -827,7 +832,7 @@ $r | ConvertTo-Json -Compress -Depth 5
                 "}\n" +
                 "$r | ConvertTo-Json -Compress -Depth 4";
 
-            var root = RunPowerShellJson(script);
+            var root = RunPowerShellJson(script, NetProbeTimeoutMs);
             if (root == null || root.Value.ValueKind != JsonValueKind.Object) return result;
 
             foreach (var prop in root.Value.EnumerateObject())
@@ -1073,7 +1078,7 @@ $r | ConvertTo-Json -Compress -Depth 5
                 $"@(Resolve-DnsName -Type TXT -Name '{name}' -ErrorAction SilentlyContinue | " +
                 "Where-Object {$_.Type -eq 'TXT'} | Select-Object -Expand Strings) | " +
                 "ConvertTo-Json -Compress";
-            var root = RunPowerShellJson(script);
+            var root = RunPowerShellJson(script, NetProbeTimeoutMs);
             if (root == null) return Array.Empty<string>();
 
             var list = new List<string>();

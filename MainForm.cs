@@ -25,6 +25,7 @@ namespace BrowseSafe
         private readonly Button _emailButton;
         private readonly Button _copyButton;
         private readonly Button _printButton;
+        private Label _sysInfo = null!;   // toolbar watermark: Windows edition / version / install date
         private readonly ToolTip _tips = new();
         private readonly Panel _leftPanel;
         private readonly TabControl _tabs;
@@ -34,8 +35,10 @@ namespace BrowseSafe
         private Label _leftHeader = null!;
         private Panel _leftBottom = null!;
 
-        // Bottom status bar: network indicator (left) + font-scale control (right).
+        // Bottom status bar: elevation + network indicators (left) + font-scale control (right).
         private Panel _statusBar = null!;
+        private Label _adminIcon = null!;     // Segoe MDL2 shield glyph
+        private Label _adminStatus = null!;   // "Administrator" / "Standard user"
         private Label _netStatus = null!;
         private Label _scaleCaption = null!;
         private Button _scaleMinus = null!;
@@ -148,7 +151,22 @@ namespace BrowseSafe
             _tips.SetToolTip(_copyButton, "Copy this tab's report to the clipboard");
             _tips.SetToolTip(_printButton, "Print this tab's report (or save as PDF)");
 
+            // Watermark in the toolbar's empty middle: Windows edition / version / install date.
+            // Clickable - opens the Settings "About" page. Hidden when nothing could be read.
+            _sysInfo = new Label
+            {
+                AutoSize = true,
+                Text = WindowsInfo.Summary,
+                Font = new Font("Segoe UI", 9f, FontStyle.Italic),
+                ForeColor = Theme.Subtle,
+                Cursor = Cursors.Hand,
+                Visible = WindowsInfo.Summary.Length > 0,
+            };
+            _sysInfo.Click += (_, _) => WindowsInfo.OpenAbout();
+            _tips.SetToolTip(_sysInfo, "This PC - open Windows Settings › About");
+
             toolbar.Controls.Add(_toggleButton);
+            toolbar.Controls.Add(_sysInfo);
             toolbar.Controls.Add(_emailButton);
             toolbar.Controls.Add(_copyButton);
             toolbar.Controls.Add(_printButton);
@@ -316,6 +334,7 @@ namespace BrowseSafe
             Controls.Add(_emailBusy);   // floating spinner shown while an email report builds
 
             UpdateBanner(); // initial title for the active (Safety Scan) tab
+            UpdateAdminStatus();
             UpdateNetStatus();
             UpdateScaleLabel();
             ApplyThemeColors(); // paint buttons/chrome for the startup theme
@@ -332,6 +351,23 @@ namespace BrowseSafe
         private void BuildStatusBar()
         {
             _statusBar = new Panel { Dock = DockStyle.Bottom, Height = 30, BackColor = Theme.Toolbar };
+
+            // Elevation indicator (left-most): a UAC shield + "Administrator" / "Standard user".
+            // When not elevated it is a hand-cursor link that relaunches the app via UAC. Colours
+            // and text are set in UpdateAdminStatus (theme-aware).
+            _adminIcon = new Label
+            {
+                AutoSize = true, Top = 6, Text = "",   // Segoe MDL2 "Shield"
+                Font = new Font("Segoe MDL2 Assets", 11f),
+            };
+            _adminStatus = new Label
+            {
+                AutoSize = true, Top = 7, Font = new Font("Segoe UI", 9f),
+            };
+            _adminIcon.Click += (_, _) => RelaunchAsAdmin();
+            _adminStatus.Click += (_, _) => RelaunchAsAdmin();
+            _statusBar.Controls.Add(_adminIcon);
+            _statusBar.Controls.Add(_adminStatus);
 
             _netStatus = new Label
             {
@@ -384,13 +420,61 @@ namespace BrowseSafe
         private void LayoutStatusBar()
         {
             if (_statusBar == null) return;
+            int h = _statusBar.ClientSize.Height;
             int right = _statusBar.ClientSize.Width - 10;
             _scalePlus.Left = Math.Max(0, right - _scalePlus.Width);
             _scaleLabel.Left = _scalePlus.Left - _scaleLabel.Width - 2;
             _scaleMinus.Left = _scaleLabel.Left - _scaleMinus.Width - 2;
             _scaleCaption.Left = _scaleMinus.Left - _scaleCaption.Width - 10;
-            _scaleCaption.Top = (_statusBar.ClientSize.Height - _scaleCaption.Height) / 2;
-            _netStatus.Top = (_statusBar.ClientSize.Height - _netStatus.Height) / 2;
+            _scaleCaption.Top = (h - _scaleCaption.Height) / 2;
+
+            // Left cluster: [shield] [Administrator | Standard user]   gap   [● Network ...]
+            int x = 12;
+            _adminIcon.Left = x;
+            _adminIcon.Top = (h - _adminIcon.Height) / 2;
+            x = _adminIcon.Right + 4;
+            _adminStatus.Left = x;
+            _adminStatus.Top = (h - _adminStatus.Height) / 2;
+            x = _adminStatus.Right + 20;
+            _netStatus.Left = x;
+            _netStatus.Top = (h - _netStatus.Height) / 2;
+        }
+
+        /// <summary>
+        /// Sets the elevation indicator's glyph, text, colour and tooltip for the current
+        /// session and theme. Admin reads as a blue shield + "Administrator"; a standard user
+        /// reads as a muted shield + "Standard user" and becomes a click-to-elevate link.
+        /// </summary>
+        private void UpdateAdminStatus()
+        {
+            bool admin = Elevation.IsAdmin;
+            _adminStatus.Text = admin ? "Administrator" : "Standard user";
+
+            Color c = admin
+                ? (Theme.IsDark ? Color.FromArgb(120, 190, 255) : Color.FromArgb(0, 90, 200))  // UAC blue
+                : Theme.Subtle;
+            _adminIcon.ForeColor = c;
+            _adminStatus.ForeColor = c;
+
+            Cursor cur = admin ? Cursors.Default : Cursors.Hand;
+            _adminIcon.Cursor = cur;
+            _adminStatus.Cursor = cur;
+
+            string tip = admin
+                ? "Running as Administrator - full access to the Security event log, SRUM and Defender history."
+                : "Standard user - some tabs (Events, Downloads, Virus history, Restores) need elevation. Click to relaunch as Administrator.";
+            _tips.SetToolTip(_adminIcon, tip);
+            _tips.SetToolTip(_adminStatus, tip);
+
+            LayoutStatusBar();
+        }
+
+        /// <summary>Relaunches the app elevated via UAC and exits the current instance. No-op when
+        /// already elevated or if the user declines the prompt.</summary>
+        private void RelaunchAsAdmin()
+        {
+            if (Elevation.IsAdmin) return;
+            if (Elevation.RelaunchAsAdmin()) Application.Exit();
         }
 
         /// <summary>Refreshes the left network indicator from the current adapter state.</summary>
@@ -430,6 +514,7 @@ namespace BrowseSafe
         {
             BackColor = Theme.Window;
             _toolbar.BackColor = Theme.Toolbar;
+            _sysInfo.ForeColor = Theme.Subtle;
 
             _leftPanel.BackColor = Theme.Panel;
             _leftBottom.BackColor = Theme.Panel;
@@ -440,7 +525,8 @@ namespace BrowseSafe
             _statusBar.BackColor = Theme.Toolbar;
             _scaleCaption.ForeColor = Theme.Subtle;
             _scaleLabel.ForeColor = Theme.Text;
-            UpdateNetStatus();   // re-tint the indicator for the new theme
+            UpdateAdminStatus(); // re-tint elevation indicator for the new theme
+            UpdateNetStatus();   // re-tint the network indicator for the new theme
 
             // Explicitly paint every button (toolbar, left panel, and inside each tab view).
             Theme.StyleButtons(this);
@@ -744,6 +830,19 @@ namespace BrowseSafe
             _emailButton.Left = Math.Max(0, _toolbar.ClientSize.Width - _emailButton.Width - 8);
             _copyButton.Left = Math.Max(0, _emailButton.Left - _copyButton.Width - 6);
             _printButton.Left = Math.Max(0, _copyButton.Left - _printButton.Width - 6);
+
+            // Centre the system-info watermark in the gap between the toggle button and the
+            // right-hand icon buttons; left-align (and let it clip) if the gap is too narrow.
+            if (_sysInfo is { Visible: true })
+            {
+                int availLeft = _toggleButton.Right + 12;
+                int availRight = _printButton.Left - 12;
+                _sysInfo.Top = (_toolbar.ClientSize.Height - _sysInfo.Height) / 2;
+                int gap = availRight - availLeft;
+                _sysInfo.Left = gap > _sysInfo.Width
+                    ? availLeft + (gap - _sysInfo.Width) / 2
+                    : availLeft;
+            }
         }
 
         private void OpenUri(string uri)

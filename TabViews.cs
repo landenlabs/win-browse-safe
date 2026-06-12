@@ -1456,6 +1456,8 @@ namespace BrowseSafe
             bool hasFile = u.AppPath.Length > 0 && File.Exists(u.AppPath);
 
             var menu = new ContextMenuStrip();
+            menu.Items.Add("Show details…", null, (_, _) => ShowDownloadDetails(owner, u));
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Open file location", null,
                 (_, _) => OpenLocation(owner, u.AppPath, Path.GetDirectoryName(u.AppPath) ?? ""))
                 .Enabled = hasFile;
@@ -1470,6 +1472,114 @@ namespace BrowseSafe
             menu.Items.Add("Search the web for this app", null, (_, _) =>
                 OpenBrowser("https://www.google.com/search?q=" + HttpUtility.UrlEncode(u.AppName)));
             menu.Show(Cursor.Position);
+        }
+
+        /// <summary>
+        /// "Show details" for a Downloads row: classify the raw SRUM identity (which is often not a
+        /// friendly name - it can be a full exe path, a Windows background-task tag, or a user SID)
+        /// and, for an executable that still exists on disk, enrich it with the file's version
+        /// metadata and Authenticode signature (read off the UI thread).
+        /// </summary>
+        private static async void ShowDownloadDetails(Control owner, SruNetUsage u)
+        {
+            var grid = owner as SortableGrid;
+            string kind = ClassifySruIdentity(u.AppPath, out string explain);
+
+            var sb = new StringBuilder();
+            sb.AppendLine(u.AppName.Length > 0 ? u.AppName : "(unnamed)");
+            sb.AppendLine();
+            sb.AppendLine($"Identity type : {kind}");
+            if (explain.Length > 0) sb.AppendLine($"                {explain}");
+            sb.AppendLine($"SRUM identity : {u.AppPath}");
+            sb.AppendLine();
+            sb.AppendLine($"Downloaded    : {SafetyChecks.FormatBytes(u.BytesRecvd)}  ({u.BytesRecvd:N0} bytes)");
+            sb.AppendLine($"Uploaded      : {SafetyChecks.FormatBytes(u.BytesSent)}  ({u.BytesSent:N0} bytes)");
+            sb.AppendLine($"Last seen     : {u.LastSeenText}");
+            if (u.Note.Length > 0) sb.AppendLine($"Note          : {u.Note}");
+
+            // An on-disk executable gets version + signature detail; a path that no longer resolves
+            // (or a non-path identity) just says so, rather than guessing.
+            string? exe = u.AppPath.Length > 0 && File.Exists(u.AppPath) ? u.AppPath : null;
+            if (exe != null)
+            {
+                grid?.SetStatus($"Reading file details for {u.AppName} …");
+                var (verLines, sig) = await Task.Run(() =>
+                {
+                    string v = DescribeFileVersion(exe);
+                    var (status, signer) = SafetyChecks.VerifyAuthenticode(exe);
+                    string s = status + (signer.Length > 0 ? $" - {signer.Split(',')[0]}" : "");
+                    return (v, s);
+                });
+                grid?.SetStatus($"Details shown for {u.AppName}.");
+                sb.AppendLine();
+                sb.AppendLine("On-disk file:");
+                sb.AppendLine(verLines);
+                sb.AppendLine($"  {"Signature",-11}: {sig}");
+            }
+            else if (kind is "Executable" or "File path")
+            {
+                sb.AppendLine();
+                sb.AppendLine("On-disk file  : not found at this path - it may have been removed, or this");
+                sb.AppendLine("                is a historical SRUM record for a deleted file.");
+            }
+
+            CopyableMessageBox.Show(owner.FindForm(), sb.ToString(), $"Download details - {u.AppName}",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        /// <summary>
+        /// Names what a SRUM id-map identity actually is. SRUM stores most rows as a full executable
+        /// path, but also keeps Windows background/packaged-app activity tags ("!!"-prefixed), user
+        /// rows (a security identifier), and - when an id is missing from the id-map - a synthetic
+        /// "(app id N)" placeholder. <paramref name="explain"/> gets a one-line gloss.
+        /// </summary>
+        private static string ClassifySruIdentity(string appPath, out string explain)
+        {
+            explain = "";
+            string p = (appPath ?? "").Trim();
+            if (p.Length == 0) { explain = "SRUM recorded no identity for this row."; return "Unknown"; }
+            if (p.StartsWith("(app id", StringComparison.OrdinalIgnoreCase))
+            {
+                explain = "The app's id was not present in SRUM's id-map, so no name is available.";
+                return "Unresolved id";
+            }
+            if (p.StartsWith("!!", StringComparison.Ordinal))
+            {
+                explain = "A Windows background / packaged-app activity tag, not a file on disk.";
+                return "Windows background task";
+            }
+            if (p.StartsWith("S-1-", StringComparison.OrdinalIgnoreCase))
+            {
+                explain = "A user-account security identifier (a SRUM user row, not an application).";
+                return "User account (SID)";
+            }
+            bool rooted = (p.Length > 2 && p[1] == ':' && p[2] == '\\') ||
+                          p.StartsWith(@"\\", StringComparison.Ordinal);
+            if (rooted && p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return "Executable";
+            if (rooted) return "File path";
+            return "Identity tag";
+        }
+
+        /// <summary>Formats an executable's version-resource metadata (description / product / company /
+        /// file version) as indented label lines, omitting any field the file does not carry.</summary>
+        private static string DescribeFileVersion(string exe)
+        {
+            try
+            {
+                var fi = FileVersionInfo.GetVersionInfo(exe);
+                var parts = new List<string>();
+                void Add(string label, string? val)
+                {
+                    if (!string.IsNullOrWhiteSpace(val)) parts.Add($"  {label,-11}: {val.Trim()}");
+                }
+                Add("Description", fi.FileDescription);
+                Add("Product", fi.ProductName);
+                Add("Company", fi.CompanyName);
+                Add("File ver", fi.FileVersion);
+                parts.Add($"  {"Path",-11}: {exe}");
+                return string.Join("\n", parts);
+            }
+            catch { return $"  {"Path",-11}: {exe}"; }
         }
 
         // ---- Virus (Defender protection state + threat / scan timeline) -- //
@@ -1529,6 +1639,9 @@ namespace BrowseSafe
         {
             var menu = new ContextMenuStrip();
 
+            menu.Items.Add("Show details…", null, (_, _) => ShowVirusDetails(owner, row));
+            menu.Items.Add(new ToolStripSeparator());
+
             if (row.Kind == DefenderEventKind.Threat)
             {
                 menu.Items.Add("Copy threat name", null, (_, _) => { try { Clipboard.SetText(row.Title); } catch { } });
@@ -1553,6 +1666,54 @@ namespace BrowseSafe
             menu.Items.Add("Open Windows Security", null, (_, _) => StartShell(owner, "windowsdefender:"));
             menu.Show(Cursor.Position);
         }
+
+        /// <summary>"Show details" for a Virus-tab row: every Defender timeline field laid out on its
+        /// own line, with the raw event id translated to plain English and (for threats) the threat
+        /// category surfaced - information the compact grid row merges away.</summary>
+        private static void ShowVirusDetails(Control owner, DefenderTimelineRow row)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine(row.Title.Length > 0 ? row.Title : row.KindText);
+            sb.AppendLine();
+            sb.AppendLine($"Type      : {row.KindText}");
+            sb.AppendLine($"Event id  : {row.EventId}  ({DefenderEventMeaning(row.EventId)})");
+            sb.AppendLine($"Result    : {row.Result}");
+            sb.AppendLine($"Time      : {row.TimeText}");
+
+            if (row.Kind == DefenderEventKind.Threat)
+            {
+                sb.AppendLine($"Threat    : {row.Title}");
+                if (row.Category.Length > 0) sb.AppendLine($"Category  : {row.Category}");
+                if (row.Path.Length > 0) sb.AppendLine($"Location  : {row.Path}");
+            }
+            else
+            {
+                sb.AppendLine($"Scan type : {row.Title}");
+            }
+
+            if (row.Detail.Length > 0) sb.AppendLine($"Detail    : {row.Detail}");
+            sb.AppendLine($"Severity  : {row.Severity}");
+
+            var icon = row.Severity == TabSeverity.Alert ? MessageBoxIcon.Warning
+                     : row.Severity == TabSeverity.Caution ? MessageBoxIcon.Exclamation
+                     : MessageBoxIcon.Information;
+            CopyableMessageBox.Show(owner.FindForm(), sb.ToString(),
+                $"Defender event details - {row.KindText}", MessageBoxButtons.OK, icon);
+        }
+
+        /// <summary>Plain-English meaning of a Microsoft Defender event id shown in the Virus tab.</summary>
+        private static string DefenderEventMeaning(int id) => id switch
+        {
+            1116 => "Threat detected",
+            1117 => "Threat remediated - action succeeded",
+            1118 => "Threat remediation failed",
+            1119 => "Threat remediation critically failed",
+            1000 => "Scan started",
+            1001 => "Scan finished",
+            1002 => "Scan stopped before completion",
+            1005 => "Scan failed",
+            _ => "Defender event",
+        };
 
         // ---- Root CAs ---------------------------------------------------- //
         public static Control BuildRootCerts()

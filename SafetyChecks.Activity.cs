@@ -34,7 +34,6 @@ namespace BrowseSafe
         {
             var list = new List<AppActivity>();
             string src = AppsIndexDbPath;
-            if (!File.Exists(src)) return list;
 
             // Last-run times to merge in by executable path (empty when not running elevated).
             var lastRun = LoadPcaLaunchTimes();
@@ -55,69 +54,74 @@ namespace BrowseSafe
                     lastRunByName[nm] = (kv.Value, kv.Key);
             }
 
-            // Stage a private copy in Temp to avoid contending with Windows Search for the file.
-            string temp = Path.Combine(Path.GetTempPath(), $"AppsIndex_bsafe_{Guid.NewGuid():N}.db");
-            string[] sidecars = { "", "-wal", "-shm" };
-            try
+            // Windows 11 keeps a per-user app-usage index (AppsIndex.db); read it when present.
+            // Windows 10 has no such database - the UserAssist fallback at the end covers that case.
+            if (File.Exists(src))
             {
-                foreach (var ext in sidecars)
-                    if (File.Exists(src + ext)) File.Copy(src + ext, temp + ext, true);
-
-                // Open the throwaway copy read-write so SQLite can fold in the -wal cleanly; the
-                // bundled native provider (Microsoft.Data.Sqlite) supplies the FTS5 module the
-                // virtual 'tiles' table is built on.
-                var cs = new SqliteConnectionStringBuilder
+                // Stage a private copy in Temp to avoid contending with Windows Search for the file.
+                string temp = Path.Combine(Path.GetTempPath(), $"AppsIndex_bsafe_{Guid.NewGuid():N}.db");
+                string[] sidecars = { "", "-wal", "-shm" };
+                try
                 {
-                    DataSource = temp,
-                    Mode = SqliteOpenMode.ReadWrite,
-                }.ToString();
+                    foreach (var ext in sidecars)
+                        if (File.Exists(src + ext)) File.Copy(src + ext, temp + ext, true);
 
-                using var conn = new SqliteConnection(cs);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText =
-                    "SELECT serializedId, appId, cRank, displayName, launchCount FROM tiles " +
-                    "WHERE CAST(launchCount AS INTEGER) > 0 ORDER BY CAST(launchCount AS INTEGER) DESC;";
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    var a = new AppActivity
+                    // Open the throwaway copy read-write so SQLite can fold in the -wal cleanly; the
+                    // bundled native provider (Microsoft.Data.Sqlite) supplies the FTS5 module the
+                    // virtual 'tiles' table is built on.
+                    var cs = new SqliteConnectionStringBuilder
                     {
-                        SerializedId = reader.IsDBNull(0) ? "" : reader.GetString(0),
-                        AppId = reader.IsDBNull(1) ? "" : reader.GetString(1),
-                        CRank = ReadLong(reader, 2),
-                        DisplayName = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                        LaunchCount = ReadLong(reader, 4),
-                    };
-                    a.Kind = a.SerializedId.StartsWith("W~", StringComparison.Ordinal) ? "Win32"
-                           : a.SerializedId.StartsWith("P~", StringComparison.Ordinal) ? "Packaged"
-                           : "Other";
-                    a.ResolvedPath = ResolveAppPath(a.AppId);
-                    if (a.ResolvedPath.Length > 0 && lastRun.TryGetValue(a.ResolvedPath, out var when))
+                        DataSource = temp,
+                        Mode = SqliteOpenMode.ReadWrite,
+                    }.ToString();
+
+                    using var conn = new SqliteConnection(cs);
+                    conn.Open();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText =
+                        "SELECT serializedId, appId, cRank, displayName, launchCount FROM tiles " +
+                        "WHERE CAST(launchCount AS INTEGER) > 0 ORDER BY CAST(launchCount AS INTEGER) DESC;";
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
                     {
-                        a.LastExecuted = when;
-                        a.LastExecutedText = when.ToString("yyyy-MM-dd HH:mm");
-                        matchedPaths.Add(a.ResolvedPath);
+                        var a = new AppActivity
+                        {
+                            SerializedId = reader.IsDBNull(0) ? "" : reader.GetString(0),
+                            AppId = reader.IsDBNull(1) ? "" : reader.GetString(1),
+                            CRank = ReadLong(reader, 2),
+                            DisplayName = reader.IsDBNull(3) ? "" : reader.GetString(3),
+                            LaunchCount = ReadLong(reader, 4),
+                        };
+                        a.Kind = a.SerializedId.StartsWith("W~", StringComparison.Ordinal) ? "Win32"
+                               : a.SerializedId.StartsWith("P~", StringComparison.Ordinal) ? "Packaged"
+                               : "Other";
+                        a.ResolvedPath = ResolveAppPath(a.AppId);
+                        if (a.ResolvedPath.Length > 0 && lastRun.TryGetValue(a.ResolvedPath, out var when))
+                        {
+                            a.LastExecuted = when;
+                            a.LastExecutedText = when.ToString("yyyy-MM-dd HH:mm");
+                            matchedPaths.Add(a.ResolvedPath);
+                        }
+                        // Path didn't resolve/match - fall back to a case-insensitive name match
+                        // (display name vs the launched exe with its .exe suffix stripped).
+                        else if (StripExeSuffix(a.DisplayName) is { Length: > 0 } key &&
+                                 lastRunByName.TryGetValue(key, out var byName))
+                        {
+                            a.LastExecuted = byName.When;
+                            a.LastExecutedText = byName.When.ToString("yyyy-MM-dd HH:mm");
+                            matchedPaths.Add(byName.Path);
+                        }
+                        ClassifyActivity(a);
+                        list.Add(a);
                     }
-                    // Path didn't resolve/match - fall back to a case-insensitive name match
-                    // (display name vs the launched exe with its .exe suffix stripped).
-                    else if (StripExeSuffix(a.DisplayName) is { Length: > 0 } key &&
-                             lastRunByName.TryGetValue(key, out var byName))
-                    {
-                        a.LastExecuted = byName.When;
-                        a.LastExecutedText = byName.When.ToString("yyyy-MM-dd HH:mm");
-                        matchedPaths.Add(byName.Path);
-                    }
-                    ClassifyActivity(a);
-                    list.Add(a);
                 }
-            }
-            catch { /* absent module / locked / corrupt - return what we have */ }
-            finally
-            {
-                foreach (var ext in sidecars)
+                catch { /* absent module / locked / corrupt - return what we have */ }
+                finally
                 {
-                    try { if (File.Exists(temp + ext)) File.Delete(temp + ext); } catch { /* best effort */ }
+                    foreach (var ext in sidecars)
+                    {
+                        try { if (File.Exists(temp + ext)) File.Delete(temp + ext); } catch { /* best effort */ }
+                    }
                 }
             }
 
@@ -142,7 +146,109 @@ namespace BrowseSafe
                 ClassifyActivity(a);
                 list.Add(a);
             }
+
+            // Windows 10 fallback: neither the Windows 11 app-usage index nor the PCA launch log
+            // produced anything, so derive launch activity from the UserAssist registry instead.
+            // Gated to Windows 10 (and earlier) - on Windows 11 the index above is the better
+            // source and folding UserAssist in would duplicate rows with a different count.
+            if (list.Count == 0 && IsWindows10OrEarlier())
+                list.AddRange(LoadUserAssistActivity());
+
             return list;
+        }
+
+        /// <summary>
+        /// True on Windows 10 (and earlier). Windows 11's first build is 22000, so a build number
+        /// below that is Windows 10 or older - the versions that lack the app-usage index and need
+        /// the UserAssist fallback.
+        /// </summary>
+        private static bool IsWindows10OrEarlier() => Environment.OSVersion.Version.Build < 22000;
+
+        /// <summary>
+        /// Windows 10 fallback source for the Activity tab. Windows 11 keeps an app-usage index
+        /// (AppsIndex.db) that Windows 10 lacks, so on Windows 10 the launch history is read from
+        /// the per-user UserAssist registry keys instead - Explorer maintains these on every desktop
+        /// Windows version. Each entry records a run count and a last-execution time (FILETIME); the
+        /// value names are ROT13-encoded executable paths (Known-Folder GUIDs expanded the same way
+        /// as index appIds). Only the executables sub-GUID is read; the sibling shortcut (.lnk) GUID
+        /// is skipped. Returns an empty list when the key is absent or unreadable. No admin rights.
+        /// </summary>
+        private static List<AppActivity> LoadUserAssistActivity()
+        {
+            var list = new List<AppActivity>();
+            const string countKey =
+                @"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\" +
+                @"{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count";
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(countKey);
+                if (key is null) return list;
+
+                foreach (string rawName in key.GetValueNames())
+                {
+                    if (rawName.Length == 0) continue;
+                    string name = Rot13(rawName);
+                    // Session/rollup markers (UEME_CTLSESSION, UEME_RUNPATH, ...) aren't real launches.
+                    if (name.StartsWith("UEME_", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    // Windows 7+ entries are a 72-byte blob: run count at offset 4 (DWORD), last-run
+                    // FILETIME at offset 0x3C (8 bytes). Skip anything too short to hold both.
+                    if (key.GetValue(rawName) is not byte[] data || data.Length < 68) continue;
+
+                    long count = BitConverter.ToUInt32(data, 4);
+                    if (count == 0) continue;
+
+                    DateTime? when = null;
+                    string whenText = "—";
+                    long ft = BitConverter.ToInt64(data, 60);   // UTC FILETIME
+                    if (ft > 0)
+                    {
+                        try
+                        {
+                            DateTime dt = DateTime.FromFileTimeUtc(ft).ToLocalTime();
+                            when = dt;
+                            whenText = dt.ToString("yyyy-MM-dd HH:mm");
+                        }
+                        catch { /* out-of-range FILETIME - leave the When column blank */ }
+                    }
+
+                    string resolved = ResolveAppPath(name);
+                    string display = Path.GetFileName(resolved.Length > 0 ? resolved : name);
+                    if (display.Length == 0) display = name;
+
+                    var a = new AppActivity
+                    {
+                        AppId = name,
+                        ResolvedPath = resolved,
+                        DisplayName = display,
+                        LaunchCount = count,
+                        Kind = "UserAssist",
+                        LastExecuted = when,
+                        LastExecutedText = whenText,
+                        IsUserAssist = true,
+                    };
+                    ClassifyActivity(a);
+                    list.Add(a);
+                }
+            }
+            catch { /* missing key / access denied - return what we have */ }
+
+            list.Sort((x, y) => y.LaunchCount.CompareTo(x.LaunchCount));   // most-launched first
+            return list;
+        }
+
+        /// <summary>ROT13 transform - the (reversible) obfuscation Windows applies to UserAssist
+        /// value names. Only ASCII letters rotate; digits, GUIDs, separators and dots pass through.</summary>
+        private static string Rot13(string s)
+        {
+            char[] chars = s.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                char c = chars[i];
+                if (c is >= 'a' and <= 'z') chars[i] = (char)('a' + (c - 'a' + 13) % 26);
+                else if (c is >= 'A' and <= 'Z') chars[i] = (char)('A' + (c - 'A' + 13) % 26);
+            }
+            return new string(chars);
         }
 
         /// <summary>Reads a column that may be stored untyped (FTS5) as a 64-bit integer.</summary>
@@ -282,17 +388,13 @@ namespace BrowseSafe
         {
             var group = new CheckGroup("App Launch Activity");
 
-            if (!File.Exists(AppsIndexDbPath))
-            {
-                group.Add(CheckStatus.Info, "App index",
-                    "AppsIndex.db not found - Windows Search's app-usage index is unavailable on this machine.");
-                return group;
-            }
-
             var items = GetAppActivity();
             if (items.Count == 0)
             {
-                group.Add(CheckStatus.Info, "App index", "No launched apps recorded in the Windows Search index.");
+                // Windows 11 reads the Search app-usage index; Windows 10 falls back to UserAssist.
+                group.Add(CheckStatus.Info, "App index", IsWindows10OrEarlier()
+                    ? "No app-launch activity found (UserAssist registry empty)."
+                    : "No launched apps recorded - Windows Search's app-usage index (AppsIndex.db) is unavailable.");
                 return group;
             }
 

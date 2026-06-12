@@ -43,9 +43,14 @@ namespace BrowseSafe
         /// of 1 and "--" for the Type / Rank columns.</summary>
         public bool IsLastRunOnly;
 
-        /// <summary>Rank column text: the index relevance rank, or "--" for a PCA-only row that the
-        /// app-usage index never ranked.</summary>
-        public string RankText => IsLastRunOnly ? "--" : CRank.ToString();
+        /// <summary>True for a row sourced from the UserAssist registry (the Windows 10 fallback,
+        /// used when Windows 11's app-usage index is absent). Such rows carry a real run count and
+        /// last-execution time but no Windows Search relevance rank, so the Rank column reads "--".</summary>
+        public bool IsUserAssist;
+
+        /// <summary>Rank column text: the index relevance rank, or "--" for a PCA-only / UserAssist
+        /// row that the app-usage index never ranked.</summary>
+        public string RankText => IsLastRunOnly || IsUserAssist ? "--" : CRank.ToString();
 
         /// <summary>Per-row audit severity (e.g. a launched binary that lives in a transient folder).</summary>
         public TabSeverity Risk;

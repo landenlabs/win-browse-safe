@@ -1,6 +1,7 @@
 // Copyright (c) 2026 LanDen Labs - Dennis Lang
 
 using System;
+using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -13,19 +14,67 @@ namespace BrowseSafe
     /// </summary>
     public sealed class BusyOverlay : Control
     {
+        private const int BaseHeight = 104;
+        private const int CancelHeight = 140;
+
         private readonly System.Windows.Forms.Timer _timer;
+        private readonly Button _cancel;
         private float _angle;
         private const int Ticks = 12;
 
+        /// <summary>Raised when the (optional) Cancel button is clicked.</summary>
+        public event Action? Cancelled;
+
         public BusyOverlay()
         {
-            Size = new Size(150, 104);
             DoubleBuffered = true;
             BackColor = Color.White;
             Visible = false;
             TabStop = false;
+
+            // Create the Cancel button before sizing: setting Size raises OnResize, which
+            // lays the button out - so the field must already be assigned.
+            _cancel = new Button
+            {
+                Text = "Cancel",
+                Width = 90,
+                Height = 26,
+                FlatStyle = FlatStyle.System,
+                Visible = false,
+            };
+            _cancel.Click += (_, _) => Cancelled?.Invoke();
+            Controls.Add(_cancel);
+
+            Size = new Size(150, BaseHeight);
+
             _timer = new System.Windows.Forms.Timer { Interval = 66 }; // ~15 fps
             _timer.Tick += (_, _) => { _angle = (_angle + 360f / Ticks) % 360f; Invalidate(); };
+        }
+
+        /// <summary>When true, shows a Cancel button below the caption (raises <see cref="Cancelled"/>).
+        /// Left false for indicators that drive non-cancellable work.</summary>
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool ShowCancel
+        {
+            get => _cancel.Visible;
+            set
+            {
+                _cancel.Visible = value;
+                Height = value ? CancelHeight : BaseHeight;
+                LayoutCancel();
+            }
+        }
+
+        private void LayoutCancel()
+        {
+            _cancel.Left = Math.Max(0, (Width - _cancel.Width) / 2);
+            _cancel.Top = Height - _cancel.Height - 8;
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            LayoutCancel();
         }
 
         public void Start()

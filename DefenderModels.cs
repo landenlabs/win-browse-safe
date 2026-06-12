@@ -85,6 +85,7 @@ namespace BrowseSafe
         public string Result = "";            // Detected / Remediated / Completed / Failed / ...
         public string Detail = "";            // threat path, or scan user / error
         public string Path = "";              // clean threat file path (threats only), for the menu
+        public string Category = "";          // threat category (Trojan / PUA / ...) - threats only, for the details view
         public TabSeverity Severity;
     }
 }

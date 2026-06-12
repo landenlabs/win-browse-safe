@@ -259,6 +259,7 @@ $ev | Where-Object {{ $_ -ne $null }} | ForEach-Object {{
                     Result = t.SeverityName.Length > 0 ? $"{t.Status} ({t.SeverityName})" : t.Status,
                     Detail = t.Action.Length > 0 ? $"{t.Action}  -  {t.Path}" : t.Path,
                     Path = t.Path,
+                    Category = t.Category,
                     Severity = t.Risk,
                 });
 
