@@ -325,9 +325,15 @@ $ev | Where-Object {{ $_ -ne $null }} | ForEach-Object {{
         /// real-time protection is off (or status is unreadable), yellow when signatures are stale.</summary>
         public static TabSeverity DefenderStatusSeverity()
         {
+            // A registered third-party AV that owns protection (Defender goes passive) is not a
+            // problem - so Defender reading "off" is only an alert when nothing else is active.
+            bool otherActive = GetSecurityCenterProducts("AntiVirusProduct")
+                .Any(p => p.Enabled && !p.IsDefender);
+
             var s = GetDefenderStatus();
-            if (!s.Available) return TabSeverity.Caution;
-            if (!s.AntivirusEnabled || !s.RealTimeProtectionEnabled) return TabSeverity.Alert;
+            if (!s.Available) return otherActive ? TabSeverity.None : TabSeverity.Caution;
+            if (!s.AntivirusEnabled || !s.RealTimeProtectionEnabled)
+                return otherActive ? TabSeverity.None : TabSeverity.Alert;
             if (s.SignatureAgeDays is int d && d > 7) return TabSeverity.Caution;
             return TabSeverity.None;
         }
@@ -339,40 +345,77 @@ $ev | Where-Object {{ $_ -ne $null }} | ForEach-Object {{
         /// one-line threat-history roll-up. Also the first section of the --run virus report.</summary>
         public static CheckGroup VirusHeader()
         {
-            var g = new CheckGroup("Virus Protection (Microsoft Defender)");
+            var g = new CheckGroup("Virus Protection");
             var s = GetDefenderStatus();
 
+            // Authoritative "what is protecting this machine": every product the Windows Security
+            // Center recognises as antivirus. A third-party agent (e.g. CrowdStrike Falcon) registers
+            // here and puts Microsoft Defender into passive mode - which is exactly why Defender's own
+            // WMI status can read "off" on a system that is, in fact, protected.
+            // List the alternate (non-Defender) AV products; Defender's own state is reported in
+            // detail below, so it would only duplicate to list it here too.
+            var others = GetSecurityCenterProducts("AntiVirusProduct").Where(p => !p.IsDefender).ToList();
+            var activeOther = others.FirstOrDefault(p => p.Enabled);
+
+            foreach (var p in others)
+            {
+                string detail = p.Enabled ? "Enabled & active." : "Registered but not active.";
+                if (p.UpToDate == false) detail += " Definitions out of date.";
+                if (p.Path.Length > 0) detail += $"  {p.Path}";
+                g.Add(p.Enabled ? CheckStatus.Pass : CheckStatus.Warn,
+                    $"Antivirus product: {p.Name}", detail);
+            }
+            if (others.Count == 0 && !s.Available)
+                g.Add(CheckStatus.Warn, "Antivirus products",
+                    "No third-party product registered with Windows Security Center, and Defender status is unavailable.");
+
+            // --- Microsoft Defender's own live engine state (WMI MSFT_MpComputerStatus) ---
             if (!s.Available)
             {
-                g.Add(CheckStatus.Warn, "Defender status",
-                    s.Error.Length > 0
-                        ? $"Could not read MSFT_MpComputerStatus ({s.Error}). A third-party antivirus may be managing protection."
-                        : "Microsoft Defender status is unavailable; a third-party antivirus may be active.");
+                g.Add(activeOther != null ? CheckStatus.Info : CheckStatus.Warn, "Microsoft Defender",
+                    activeOther != null
+                        ? $"Status unavailable - \"{activeOther.Name}\" is the active antivirus listed above."
+                        : s.Error.Length > 0
+                            ? $"Could not read MSFT_MpComputerStatus ({s.Error}). A third-party antivirus may be managing protection."
+                            : "Microsoft Defender status is unavailable; a third-party antivirus may be active.");
                 return g;
             }
 
-            string mode = s.RunningMode.Length > 0 && !s.RunningMode.Equals("Normal", StringComparison.OrdinalIgnoreCase)
-                ? $" (mode: {s.RunningMode})" : "";
-            g.Add(s.AntivirusEnabled ? CheckStatus.Pass : CheckStatus.Fail, "Antivirus",
-                (s.AntivirusEnabled ? "Enabled." : "DISABLED.") + mode);
-            g.Add(s.RealTimeProtectionEnabled ? CheckStatus.Pass : CheckStatus.Fail, "Real-time protection",
-                s.RealTimeProtectionEnabled ? "On." : "OFF.");
+            bool defenderActive = s.AntivirusEnabled && s.RealTimeProtectionEnabled;
 
-            if (s.BehaviorMonitorEnabled is bool bm)
-                g.Add(bm ? CheckStatus.Pass : CheckStatus.Warn, "Behavior monitoring", bm ? "On." : "Off.");
-            if (s.TamperProtected is bool tp)
-                g.Add(tp ? CheckStatus.Pass : CheckStatus.Warn, "Tamper protection", tp ? "On." : "Off.");
-            if (s.CloudProtection is bool cp)
-                g.Add(cp ? CheckStatus.Pass : CheckStatus.Info, "Cloud-delivered protection", cp ? "On." : "Off.");
+            // Defender passive because a third-party product owns protection: report it as Info, not
+            // a red failure, and skip Defender's per-feature posture - it would otherwise show
+            // misleading "Off"s for an engine that is intentionally standing down.
+            if (!defenderActive && activeOther != null)
+            {
+                g.Add(CheckStatus.Info, "Microsoft Defender",
+                    $"Passive - \"{activeOther.Name}\" is the active antivirus.");
+            }
+            else
+            {
+                string mode = s.RunningMode.Length > 0 && !s.RunningMode.Equals("Normal", StringComparison.OrdinalIgnoreCase)
+                    ? $" (mode: {s.RunningMode})" : "";
+                g.Add(s.AntivirusEnabled ? CheckStatus.Pass : CheckStatus.Fail, "Antivirus",
+                    (s.AntivirusEnabled ? "Enabled." : "DISABLED.") + mode);
+                g.Add(s.RealTimeProtectionEnabled ? CheckStatus.Pass : CheckStatus.Fail, "Real-time protection",
+                    s.RealTimeProtectionEnabled ? "On." : "OFF.");
 
-            string ver = s.SignatureVersion.Length > 0 ? "v" + s.SignatureVersion : "version unknown";
-            string age = s.SignatureAgeDays is int da ? $"{da} day(s) old" : "age unknown";
-            string updated = s.SignatureLastUpdated is DateTime u ? $", updated {u:yyyy-MM-dd HH:mm}" : "";
-            g.Add(s.SignatureAgeDays is int d2 && d2 > 7 ? CheckStatus.Warn : CheckStatus.Info,
-                "Signatures", $"{ver}, {age}{updated}.");
+                if (s.BehaviorMonitorEnabled is bool bm)
+                    g.Add(bm ? CheckStatus.Pass : CheckStatus.Warn, "Behavior monitoring", bm ? "On." : "Off.");
+                if (s.TamperProtected is bool tp)
+                    g.Add(tp ? CheckStatus.Pass : CheckStatus.Warn, "Tamper protection", tp ? "On." : "Off.");
+                if (s.CloudProtection is bool cp)
+                    g.Add(cp ? CheckStatus.Pass : CheckStatus.Info, "Cloud-delivered protection", cp ? "On." : "Off.");
 
-            g.Add(ScanStatus(s.QuickScanEnd, 14), "Last quick scan", ScanText(s.QuickScanEnd));
-            g.Add(CheckStatus.Info, "Last full scan", ScanText(s.FullScanEnd));
+                string ver = s.SignatureVersion.Length > 0 ? "v" + s.SignatureVersion : "version unknown";
+                string age = s.SignatureAgeDays is int da ? $"{da} day(s) old" : "age unknown";
+                string updated = s.SignatureLastUpdated is DateTime u ? $", updated {u:yyyy-MM-dd HH:mm}" : "";
+                g.Add(s.SignatureAgeDays is int d2 && d2 > 7 ? CheckStatus.Warn : CheckStatus.Info,
+                    "Signatures", $"{ver}, {age}{updated}.");
+
+                g.Add(ScanStatus(s.QuickScanEnd, 14), "Last quick scan", ScanText(s.QuickScanEnd));
+                g.Add(CheckStatus.Info, "Last full scan", ScanText(s.FullScanEnd));
+            }
 
             if (Elevation.IsAdmin)
             {

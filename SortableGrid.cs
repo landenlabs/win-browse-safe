@@ -141,7 +141,7 @@ namespace BrowseSafe
                     ForeColor = Theme.Text, BackColor = Color.Transparent,
                 };
                 _toggle.CheckedChanged += (_, _) => Populate();
-                if (!string.IsNullOrEmpty(st.Tooltip)) new ToolTip().SetToolTip(_toggle, st.Tooltip);
+                if (!string.IsNullOrEmpty(st.Tooltip)) _toggleTip.SetToolTip(_toggle, st.Tooltip);
                 top.Controls.Add(_toggle);
                 x += w + 8;
             }
@@ -534,6 +534,10 @@ namespace BrowseSafe
         }
 
         private readonly ToolTip _linkTip = new();
+
+        // Held in a field so it is not garbage-collected; a ToolTip with no live reference
+        // stops showing. Backs the "All" toggle's hover tooltip on every tab.
+        private readonly ToolTip _toggleTip = new();
 
         private void HeaderMouseMove(object? sender, MouseEventArgs e)
         {

@@ -249,6 +249,38 @@ namespace BrowseSafe
             "- Right-click a row to open its file location, manage startup apps in Settings, or open Task Manager.\n" +
             "\n" + Common);
 
+        public static readonly HelpInfo Scheduled = new("Scheduled Tasks",
+            "# What this shows\n" +
+            "Windows Task Scheduler entries. Scheduled tasks are a top program-persistence mechanism " +
+            "(alongside services and Run keys), so risky and recently-created tasks float to the top.\n" +
+            "\n" +
+            "# Status (the audit)\n" +
+            "- Alert (red) - the task runs a program from a temp/download folder, or a living-off-the-land " +
+            "binary (powershell, mshta, rundll32, ...) with arguments.\n" +
+            "- Review (yellow) - runs from AppData/ProgramData, a LOLBin without arguments, or a hidden task " +
+            "whose program sits outside Program Files / Windows.\n" +
+            "- OK - nothing notable.\n" +
+            "\n" +
+            "# Columns\n" +
+            "- Created - task registration date (also drives the recency colour).\n" +
+            "- Last run / Next run - from Get-ScheduledTaskInfo; '—' when never run or no future trigger.\n" +
+            "- Repeat - the trigger's repeat period: minutes (5M), hours (6H / 6.2H) or days (7D / 1.5D). " +
+            "'—' for weekly/monthly/event/logon/boot triggers, which have no simple period.\n" +
+            "- Run as - the principal the task runs under (SYSTEM is more powerful than a user).\n" +
+            "- Program - the first executable action and its arguments.\n" +
+            "- Path - the task folder; \\Microsoft\\Windows\\... are Windows' own built-in tasks.\n" +
+            "\n" + Recency +
+            "\n" +
+            "# Filters\n" +
+            "- All - off by default hides Windows' own built-in tasks (\\Microsoft\\Windows\\) that are not " +
+            "flagged; turn it on to list every task.\n" +
+            "\n" +
+            "# Special actions\n" +
+            "- Open Task Scheduler - launches taskschd.msc.\n" +
+            "- Scan (per row) - verify the program's signature or look it up on VirusTotal by SHA-256.\n" +
+            "- Right-click a row to open the file location, copy the task name/program, or open Task Scheduler.\n" +
+            "\n" + Common);
+
         public static readonly HelpInfo Installed = new("Installed Programs",
             "# What this shows\n" +
             "Installed programs from the uninstall registry, enriched with winget so the list is a " +

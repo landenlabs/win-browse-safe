@@ -32,6 +32,7 @@ namespace BrowseSafe
             ("services",  "Services", new Func<CheckGroup>[] { SafetyChecks.CheckServices }),
             ("processes", "Processes", new Func<CheckGroup>[] { SafetyChecks.CheckProcesses }),
             ("startup",   "Startup", new Func<CheckGroup>[] { SafetyChecks.CheckStartup }),
+            ("scheduled", "Scheduled Tasks", new Func<CheckGroup>[] { SafetyChecks.CheckScheduledTasks }),
             ("installed", "Installed", new Func<CheckGroup>[] { SafetyChecks.CheckInstalled }),
             ("devices",   "Devices", new Func<CheckGroup>[] { SafetyChecks.CheckDevices }),
             ("winext",    "Shell Extensions", new Func<CheckGroup>[] { SafetyChecks.CheckWinExt }),

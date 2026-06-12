@@ -288,6 +288,7 @@ namespace BrowseSafe
             AddViewTab("Services", "services", TabViews.BuildServices());
             AddViewTab("Processes", "processes", TabViews.BuildProcesses());
             AddViewTab("Startup", "startup", TabViews.BuildStartup());
+            AddViewTab("Scheduled", "scheduled", TabViews.BuildScheduled());
             AddViewTab("Installed", "installed", TabViews.BuildInstalled());
             AddViewTab("Devices", "devices", TabViews.BuildDevices());
             AddViewTab("Win Extn", "winext", TabViews.BuildWinExt());
@@ -530,6 +531,7 @@ namespace BrowseSafe
             ["services"] = "3rd party background services",
             ["processes"] = "Running processes",
             ["startup"] = "Startup on login",
+            ["scheduled"] = "Scheduled tasks",
             ["installed"] = "Installed program changes",
             ["devices"] = "Installed device changes",
             ["winext"] = "File Explorer shell extensions",

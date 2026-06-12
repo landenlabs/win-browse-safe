@@ -62,6 +62,26 @@ namespace BrowseSafe
             group.Add(CheckStatus.Info, "Last rule change",
                 lastChange.HasValue ? lastChange.Value.ToString("yyyy-MM-dd HH:mm") : "Unknown.");
 
+            // Third-party firewall products registered with the Windows Security Center. A genuine
+            // replacement firewall (CrowdStrike, ZoneAlarm, Comodo, ...) registers here and is the
+            // authoritative "what is managing the firewall" answer. Front-ends that merely drive the
+            // built-in firewall (e.g. Malwarebytes Windows Firewall Control) do not register and so
+            // will not appear - the Windows Defender Firewall stays the recognised provider.
+            try
+            {
+                var fwProducts = GetSecurityCenterProducts("FirewallProduct");
+                if (fwProducts.Count == 0)
+                    group.Add(CheckStatus.Info, "Firewall product",
+                        "No third-party firewall registered with Windows Security Center; Windows Defender Firewall is managing protection.");
+                else
+                    foreach (var p in fwProducts)
+                        group.Add(p.Enabled ? CheckStatus.Pass : CheckStatus.Warn,
+                            $"Firewall product: {p.Name}",
+                            (p.Enabled ? "Registered & active." : "Registered but not active.") +
+                            (p.Path.Length > 0 ? $"  {p.Path}" : ""));
+            }
+            catch { /* SecurityCenter2 absent (e.g. Server SKU) - skip */ }
+
             if (readable == 0)
                 group.Add(CheckStatus.Warn, "Firewall verdict", "Could not read firewall state from the registry.");
             else if (enabled == 0)

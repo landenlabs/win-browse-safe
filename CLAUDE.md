@@ -22,9 +22,9 @@ BrowseSafe.exe --inventory         # alias for --run all
 BrowseSafe.exe --run events --out events.txt   # also write report to a file
 ```
 
-Scopes: `scan, dns, arp, patches, chrome, settings, services, processes, startup, installed,
-devices, winext, events, activity, downloads, firewall, virus, restores, all` (the catalog in
-`Reports.cs` is the source of truth). `events` needs Administrator to read the Security log;
+Scopes: `scan, dns, arp, patches, chrome, settings, services, processes, startup, scheduled,
+installed, devices, winext, events, activity, downloads, firewall, virus, restores, all` (the
+catalog in `Reports.cs` is the source of truth). `events` needs Administrator to read the Security log;
 `downloads` needs Administrator to read the SRUM database; `virus` reads protection state without
 elevation but needs Administrator for the Defender threat/scan history (the event log).
 
@@ -78,6 +78,7 @@ The whole app is built on one small data model and a central catalog:
 | `SafetyChecks.ChromePrefs.cs` | Chrome exe integrity, privacy prefs, extensions |
 | `SafetyChecks.ChromeSettings.cs` | Chrome settings matrix (settings × profiles + policy Global col) — the Settings tab |
 | `SafetyChecks.Inventory.cs` | Services, processes, startup, installed, devices (largest) |
+| `SafetyChecks.Scheduled.cs` | Task Scheduler entries + hijack audit (Temp/LOLBin/hidden) — the Scheduled tab |
 | `SafetyChecks.Winget.cs` | winget-sourced install metadata |
 | `SafetyChecks.WinExt.cs` | Shell / context-menu extensions |
 | `SafetyChecks.Firewall.cs` | Firewall state + rules |
@@ -85,13 +86,14 @@ The whole app is built on one small data model and a central catalog:
 | `SafetyChecks.Activity.cs` | App launch counts (Windows Search `AppsIndex.db`) + PCA last-run merge |
 | `SafetyChecks.Sru.cs` | Per-app network bytes sent/received from SRUM (`SRUDB.dat`, via esentutl + ManagedEsent) — the Downloads tab |
 | `SafetyChecks.Defender.cs` | Defender protection state (WMI `MSFT_MpComputerStatus`) + threat/scan history (Defender Operational event log) — the Virus tab |
+| `SafetyChecks.SecurityCenter.cs` | Windows Security Center (`root\SecurityCenter2`) registered antivirus/firewall products — feeds the Virus tab (alternate AV, e.g. CrowdStrike) and the Firewall tab (third-party firewall provider) |
 | `SafetyChecks.Restore.cs` | System Restore points |
 
 ### Row model / DTO classes
 One small record-like class per item type, consumed by the grids:
 `AppActivity`, `ArpEntry`, `ChromeExtension`, `DeviceDriver`, `DnsCacheEntry`, `EventItem`,
-`FirewallRule`, `InstalledProgram`, `ProcessItem`, `RestorePoint`, `ServiceInfo`,
-`ShellExtension`, `SruNetUsage`, `StartupItem`. The Settings tab uses a small matrix model
+`FirewallRule`, `InstalledProgram`, `ProcessItem`, `RestorePoint`, `ScheduledTaskItem`,
+`ServiceInfo`, `ShellExtension`, `SruNetUsage`, `StartupItem`. The Settings tab uses a small matrix model
 instead (`ChromeSettingsMatrix.cs`: `ChromeSettingsMatrix` / `SettingRow` / `ColumnDef`). The
 Virus tab uses `DefenderModels.cs`: `DefenderStatusSummary` (WMI state), `ThreatDetectionRecord` /
 `ScanHistoryRecord` (parsed events), and `DefenderTimelineRow` (the merged grid row).

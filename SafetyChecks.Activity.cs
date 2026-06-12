@@ -41,6 +41,20 @@ namespace BrowseSafe
             // Paths consumed by an indexed app, so the leftovers can become their own rows below.
             var matchedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            // Secondary index for a name-based fallback: executable base name with the .exe
+            // suffix removed, keyed case-insensitively, -> the most recent PCA entry (time +
+            // originating path). Lets an indexed app whose on-disk path we couldn't resolve
+            // (identifier-only appIds) still pick up a last-run time when its display name
+            // matches the launched exe - e.g. PCA "Slack.exe" / "slack.exe" -> app "Slack".
+            var lastRunByName = new Dictionary<string, (DateTime When, string Path)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in lastRun)
+            {
+                string nm = StripExeSuffix(Path.GetFileName(kv.Key));
+                if (nm.Length == 0) continue;
+                if (!lastRunByName.TryGetValue(nm, out var prev) || kv.Value > prev.When)
+                    lastRunByName[nm] = (kv.Value, kv.Key);
+            }
+
             // Stage a private copy in Temp to avoid contending with Windows Search for the file.
             string temp = Path.Combine(Path.GetTempPath(), $"AppsIndex_bsafe_{Guid.NewGuid():N}.db");
             string[] sidecars = { "", "-wal", "-shm" };
@@ -85,6 +99,15 @@ namespace BrowseSafe
                         a.LastExecutedText = when.ToString("yyyy-MM-dd HH:mm");
                         matchedPaths.Add(a.ResolvedPath);
                     }
+                    // Path didn't resolve/match - fall back to a case-insensitive name match
+                    // (display name vs the launched exe with its .exe suffix stripped).
+                    else if (StripExeSuffix(a.DisplayName) is { Length: > 0 } key &&
+                             lastRunByName.TryGetValue(key, out var byName))
+                    {
+                        a.LastExecuted = byName.When;
+                        a.LastExecutedText = byName.When.ToString("yyyy-MM-dd HH:mm");
+                        matchedPaths.Add(byName.Path);
+                    }
                     ClassifyActivity(a);
                     list.Add(a);
                 }
@@ -128,6 +151,17 @@ namespace BrowseSafe
             if (r.IsDBNull(i)) return 0;
             try { return r.GetInt64(i); }
             catch { return long.TryParse(r.GetValue(i)?.ToString(), out var v) ? v : 0; }
+        }
+
+        /// <summary>
+        /// Strips a trailing ".exe" (case-insensitive) so a launched executable name can be
+        /// compared to a friendly display name. Only ".exe" is removed - names that merely
+        /// contain dots (e.g. "Node.js") are left intact.
+        /// </summary>
+        private static string StripExeSuffix(string name)
+        {
+            name = name.Trim();
+            return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
         }
 
         /// <summary>Program Compatibility Assistant launch log - the only per-app "last run" source.</summary>

@@ -10,8 +10,11 @@ namespace BrowseSafe
     /// <summary>
     /// Recent Windows Event Log scan: surfaces critical/error events plus a curated
     /// set of security-significant events (Defender detections, firewall rule changes,
-    /// new service installs, audit-log clears, account/group changes) from the last
-    /// few days - the things that pile up in Event Viewer that no one ever reviews.
+    /// new service installs, audit-log clears, account/group changes, scheduled-task
+    /// create/delete/update, and explicit-credential logons) from the last few days -
+    /// the things that pile up in Event Viewer that no one ever reviews. Failed logons
+    /// (4625) are listed too but not flagged significant (they are common and noisy).
+    /// The Security-channel events require Administrator; without it they yield nothing.
     /// Read via Get-WinEvent so each channel is server-side filtered and a channel that
     /// requires elevation (e.g. Security) simply yields nothing instead of failing.
     /// </summary>
@@ -26,6 +29,8 @@ namespace BrowseSafe
             7045,                       // System: a new service was installed
             1102,                       // Security: the audit log was cleared
             4720, 4728, 4732, 4756,     // Security: account created / added to a (admin) group
+            4648,                       // Security: logon using explicit credentials (lateral movement)
+            4698, 4699, 4702,           // Security: scheduled task created / deleted / updated
         };
 
         /// <summary>Structured recent-event list used by the Events grid.</summary>
@@ -44,7 +49,8 @@ $ev+=Q @{{LogName='Application';Level=1,2;StartTime=$start}} 200
 $ev+=Q @{{LogName='System';Id=7045,7030,7031,7034;StartTime=$start}} 100
 $ev+=Q @{{LogName='Microsoft-Windows-Windows Defender/Operational';Id=1006,1008,1015,1116,1117,5001,5007,5010,5012;StartTime=$start}} 100
 $ev+=Q @{{LogName='Microsoft-Windows-Windows Firewall With Advanced Security/Firewall';Id=2004,2005,2006,2033;StartTime=$start}} 100
-$ev+=Q @{{LogName='Security';Id=1102,4720,4728,4732,4756;StartTime=$start}} 100
+$ev+=Q @{{LogName='Security';Id=1102,4720,4728,4732,4756,4648,4698,4699,4702;StartTime=$start}} 200
+$ev+=Q @{{LogName='Security';Id=4625;StartTime=$start}} 200
 $ev | Where-Object {{ $_ -ne $null }} | ForEach-Object {{
   $m = ([string]$_.Message -split ""`r?`n"")[0]
   [pscustomobject]@{{ Time=$_.TimeCreated.ToString('o'); Id=[int]$_.Id; Level=[string]$_.LevelDisplayName; Source=[string]$_.ProviderName; Channel=[string]$_.LogName; Message=$m }}

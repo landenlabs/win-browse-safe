@@ -1073,6 +1073,180 @@ namespace BrowseSafe
             }
         }
 
+        // ---- Scheduled: Windows Task Scheduler entries ------------------- //
+        public static Control BuildScheduled()
+        {
+            SortableGrid grid = null!;
+            var cols = new[]
+            {
+                new GridColumn { Header = "Status", Width = 70,
+                    Text = o => ScheduledStatusLabel((ScheduledTaskItem)o),
+                    Sort = o => (int)((ScheduledTaskItem)o).Risk,
+                    Style = o => ScheduledStyle((ScheduledTaskItem)o) },
+                new GridColumn { Header = "Enabled", Width = 76,
+                    Text = o => ((ScheduledTaskItem)o).Enabled ? "Enabled" : "Disabled",
+                    Sort = o => ((ScheduledTaskItem)o).Enabled ? 1 : 0,
+                    Style = o => ((ScheduledTaskItem)o).Enabled ? null : ((Color, Color)?)(DisBack, DisFore) },
+                new GridColumn { Header = "Scan", Width = 64, Button = true, ButtonText = "Scan" },
+                new GridColumn { Header = "Created", Width = 92,
+                    Text = o => ((ScheduledTaskItem)o).CreatedText,
+                    Sort = o => ((ScheduledTaskItem)o).StatusSort,
+                    Style = o => RecencyStyle(((ScheduledTaskItem)o).DaysOld) },
+                new GridColumn { Header = "Last run", Width = 118,
+                    Text = o => ((ScheduledTaskItem)o).LastRunText,
+                    Sort = o => ((ScheduledTaskItem)o).LastRun ?? DateTime.MinValue },
+                new GridColumn { Header = "Next run", Width = 118,
+                    Text = o => ((ScheduledTaskItem)o).NextRunText,
+                    Sort = o => ((ScheduledTaskItem)o).NextRun ?? DateTime.MinValue },
+                new GridColumn { Header = "Repeat", Width = 64,
+                    Text = o => ((ScheduledTaskItem)o).RepeatText,
+                    Sort = o => ((ScheduledTaskItem)o).RepeatMinutes },
+                new GridColumn { Header = "Run as", Width = 120,
+                    Text = o => ((ScheduledTaskItem)o).RunAs,
+                    FilterKind = ColumnFilterKind.Dropdown },
+                new GridColumn { Header = "Task", Fill = 150,
+                    Text = o => ((ScheduledTaskItem)o).Name,
+                    FilterKind = ColumnFilterKind.Regex },
+                new GridColumn { Header = "Program", Fill = 200,
+                    Text = o => { var t = (ScheduledTaskItem)o; return t.Arguments.Length > 0 ? t.Execute + " " + t.Arguments : t.Execute; },
+                    FilterKind = ColumnFilterKind.Regex },
+                new GridColumn { Header = "Path", Fill = 130,
+                    Text = o => ((ScheduledTaskItem)o).TaskPath,
+                    FilterKind = ColumnFilterKind.Regex },
+            };
+
+            grid = new SortableGrid("Refresh",
+                () => SafetyChecks.GetScheduledTasks().Cast<object>().ToList(),
+                cols, defaultSortColumn: 0, defaultAscending: false,   // flagged tasks float to the top
+                onButtonClick: o => { var t = (ScheduledTaskItem)o; ShowScanMenu(grid, t.Name, () => ExistingPath(t.ExePath)); },
+                extraButtons: new (string, Action)[] { ("Open Task Scheduler", () => StartShell(grid, "taskschd.msc")) },
+                help: TabHelp.Scheduled,
+                severity: items =>
+                {
+                    var tasks = items.OfType<ScheduledTaskItem>().ToList();
+                    var worst = TabSeverity.None;
+                    int alert = 0, review = 0, recent = 0;
+                    foreach (var t in tasks)
+                    {
+                        worst = Sev.Max(worst, Sev.Max(t.Risk, Sev.FromDays(t.DaysOld)));
+                        if (t.Risk == TabSeverity.Alert) alert++;
+                        else if (t.Risk == TabSeverity.Caution) review++;
+                        if (t.Risk < TabSeverity.Caution && t.DaysOld is int d && d < 30) recent++;
+                    }
+                    grid.SetStatus($"{tasks.Count} task(s)  -  {alert} alert, {review} review, {recent} new (30d)");
+                    return worst;
+                },
+                showAllToggle: ("All",
+                    "Off: hide disabled tasks and Windows' own built-in tasks (\\Microsoft\\Windows\\) that aren't flagged.  On: show every task.",
+                    o =>
+                    {
+                        var t = (ScheduledTaskItem)o;
+                        if (!t.Enabled) return true;   // hide disabled tasks when "All" is off
+                        bool builtin = t.TaskPath.StartsWith(@"\Microsoft\", StringComparison.OrdinalIgnoreCase);
+                        return builtin && t.Risk < TabSeverity.Caution;   // and non-flagged Windows built-ins
+                    }),
+                onRowContext: o => ShowScheduledMenu(grid, (ScheduledTaskItem)o));
+            return grid;
+        }
+
+        private static string ScheduledStatusLabel(ScheduledTaskItem t) => t.Risk switch
+        {
+            TabSeverity.Alert => "Alert",
+            TabSeverity.Caution => "Review",
+            _ => "OK",
+        };
+        private static (Color Back, Color Fore)? ScheduledStyle(ScheduledTaskItem t) => t.Risk switch
+        {
+            TabSeverity.Alert => (RedBack, RedFore),
+            TabSeverity.Caution => (YelBack, YelFore),
+            _ => null,
+        };
+
+        private static void ShowScheduledMenu(SortableGrid grid, ScheduledTaskItem t)
+        {
+            bool hasExe = t.ExePath.Length > 0 && t.ExePath.IndexOf('\\') >= 0;
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Copy task name", null, (_, _) => { try { Clipboard.SetText(t.FullName); } catch { } });
+            menu.Items.Add("Copy program path", null, (_, _) => { try { Clipboard.SetText(t.Execute); } catch { } })
+                .Enabled = t.Execute.Length > 0;
+            menu.Items.Add("Open file location", null,
+                (_, _) => OpenLocation(grid, t.ExePath, Path.GetDirectoryName(t.ExePath) ?? ""))
+                .Enabled = hasExe && File.Exists(t.ExePath);
+            if (t.Note.Length > 0)
+                menu.Items.Add("Copy audit note", null, (_, _) => { try { Clipboard.SetText(t.Note); } catch { } });
+            menu.Items.Add(new ToolStripSeparator());
+            // taskschd.msc can't be navigated to a specific task from the command line, so this
+            // shows the same Properties-level detail (schtasks /v) for the right-clicked task.
+            menu.Items.Add("Show task details (Properties)", null,
+                async (_, _) => await ShowScheduledDetailsAsync(grid, t));
+            menu.Items.Add("Search web for program", null, (_, _) =>
+            {
+                string term = hasExe ? Path.GetFileName(t.ExePath) : t.Name;
+                string q = HttpUtility.UrlEncode(term + " scheduled task");
+                OpenBrowser($"https://www.google.com/search?q={q}");
+            });
+            menu.Items.Add(new ToolStripSeparator());
+            // Toggling state writes to the system, so it is offered only when elevated (the
+            // spawned PowerShell inherits this process's rights). Otherwise show why it's greyed.
+            if (Elevation.IsAdmin)
+                menu.Items.Add(t.Enabled ? "Disable task" : "Enable task", null,
+                    (_, _) => _ = ToggleScheduledTask(grid, t));
+            else
+                menu.Items.Add("Enable / disable task (run app as admin)", null, null).Enabled = false;
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Open Task Scheduler (taskschd.msc)", null, (_, _) => StartShell(grid, "taskschd.msc"));
+            menu.Show(Cursor.Position);
+        }
+
+        private static async Task ToggleScheduledTask(SortableGrid grid, ScheduledTaskItem t)
+        {
+            bool enable = !t.Enabled;
+            string action = enable ? "Enable" : "Disable";
+
+            var confirm = CopyableMessageBox.Show(grid.FindForm(),
+                $"{action} this scheduled task?\n\n{t.FullName}\n\nProgram: {(t.Execute.Length > 0 ? t.Execute : "(none)")}\nRuns as: {t.RunAs}",
+                $"{action} scheduled task", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (confirm != DialogResult.Yes) return;
+
+            grid.SetStatus($"{action} task: {t.Name} …");
+            var (ok, msg) = await Task.Run(() => SafetyChecks.SetScheduledTaskState(t.TaskPath, t.Name, enable));
+            await grid.RunAsync();   // reload so the Enabled/Status columns reflect the change
+            grid.SetStatus(msg);
+            if (!ok)
+                CopyableMessageBox.Show(grid.FindForm(), msg,
+                    $"{action} task failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        private static async Task ShowScheduledDetailsAsync(Control owner, ScheduledTaskItem t)
+        {
+            string output = await Task.Run(() => SafetyChecks.GetScheduledTaskDetails(t.FullName));
+            try
+            {
+                if (owner?.FindForm() is Form parent)
+                {
+                    var dlg = new Form
+                    {
+                        Text = $"Task details - {t.Name}",
+                        Size = new Size(820, 560),
+                        StartPosition = FormStartPosition.CenterParent,
+                    };
+                    var tb = new TextBox
+                    {
+                        Multiline = true, ReadOnly = true, WordWrap = false,
+                        ScrollBars = ScrollBars.Both, Dock = DockStyle.Fill,
+                        Font = new Font("Consolas", 9f), Text = output,
+                    };
+                    dlg.Controls.Add(tb);
+                    dlg.ShowDialog(parent);
+                }
+                else
+                {
+                    CopyableMessageBox.Show(output, $"Task details - {t.Name}", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch { try { CopyableMessageBox.Show(output, $"Task details - {t.Name}", MessageBoxButtons.OK, MessageBoxIcon.Information); } catch { } }
+        }
+
         // ---- Events: recent Windows Event Log issues --------------------- //
         public static Control BuildEvents()
         {
