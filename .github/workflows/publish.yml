@@ -34,7 +34,7 @@ jobs:
 
       - name: Publish (win-x64 self-contained single file)
         run: |
-          dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:EnableCompressionInSingleFile=true -o ./artifacts/win-x64
+          dotnet publish -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:EnableCompressionInSingleFile=true /p:DebugType=none /p:DebugSymbols=false -o ./artifacts/win-x64
 
       # Signs the final single-file apphost AFTER publish (and before zipping) so the
       # released exe carries the signature. Skipped automatically when no cert secret is set.
@@ -66,15 +66,6 @@ jobs:
           Write-Host "Signature status: $($sig.Status)  signer: $($sig.SignerCertificate.Subject)"
           if ($sig.Status -ne 'Valid') { throw "Post-sign verification failed: $($sig.Status)" }
 
-      - name: Package artifact as zip
-        shell: pwsh
-        run: |
-          $tag = '${{ github.ref_name }}'
-          $outDir = "./artifacts/win-x64"
-          $zip = "./artifacts/B4Browse-$tag-win-x64.zip"
-          if (Test-Path $zip) { Remove-Item $zip }
-          Compress-Archive -Path "$outDir/*" -DestinationPath $zip -Force
-
       - name: Create GitHub Release and upload asset
         uses: softprops/action-gh-release@v2
         with:
@@ -83,4 +74,4 @@ jobs:
           body: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
-          files: ./artifacts/B4Browse-${{ github.ref_name }}-win-x64.zip
+          files: ./artifacts/win-x64/B4Browse.exe

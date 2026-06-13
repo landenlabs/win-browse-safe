@@ -185,7 +185,12 @@ namespace B4Browse
 
                 new GridColumn { Header = "HotFix ID", Width = 110, Text = o => ((WindowsPatch)o).HotFixID, Sort = o => ((WindowsPatch)o).InstalledOn },
                 new GridColumn { Header = "Version", Width = 110, Text = o => ((WindowsPatch)o).Version, Sort = o => ((WindowsPatch)o).Version },
-                new GridColumn { Header = "DocLink", Width = 110, Link = true, Text = o => ((WindowsPatch)o).DocLink, Sort = o => ((WindowsPatch)o).DocLink },
+                // The WMI Caption "DocLink" is unreliable (often empty or a generic support-home URL),
+                // so this opens a web search for the KB instead - which always lands on useful info.
+                // Right-click offers the Update Catalog, the support article, and local details.
+                new GridColumn { Header = "Lookup", Width = 110, Link = true,
+                    Text = o => PatchLookupLabel((WindowsPatch)o),
+                    LinkTarget = o => PatchSearchUrl((WindowsPatch)o) },
 
                 new GridColumn { Header = "Description", Fill = 180, Text = o => ((WindowsPatch)o).Description },
                            };
@@ -195,7 +200,8 @@ namespace B4Browse
                 () => GetPatches().Cast<object>().ToList(),
                 cols, defaultSortColumn: 2, defaultAscending: false,
                 help: TabHelp.Patches,
-                severity: items => TabSeverity.None);
+                severity: items => TabSeverity.None,
+                onRowContext: o => ShowPatchMenu(grid, (WindowsPatch)o));
             return grid;
         }
 
@@ -204,7 +210,7 @@ namespace B4Browse
             var list = new System.Collections.Generic.List<WindowsPatch>();
             try
             {
-                var searcher = new ManagementObjectSearcher("SELECT HotFixID, Description, InstalledOn, Caption, ServicePackInEffect FROM Win32_QuickFixEngineering");
+                var searcher = new ManagementObjectSearcher("SELECT HotFixID, Description, InstalledOn, Caption, ServicePackInEffect, InstalledBy, FixComments FROM Win32_QuickFixEngineering");
                 foreach (ManagementObject obj in searcher.Get())
                 {
                     string id = obj["HotFixID"]?.ToString() ?? "Unknown";
@@ -216,7 +222,12 @@ namespace B4Browse
 
                     if (DateTime.TryParse(raw, out DateTime dt)) {
                         int daysOld = Math.Max(0, (int)(DateTime.Now - dt).TotalDays);
-                        list.Add(new WindowsPatch { HotFixID = id, Description = desc, InstalledOn = dt, DaysOld = daysOld, DocLink = doc, Version = ver });
+                        list.Add(new WindowsPatch {
+                            HotFixID = id, Description = desc, InstalledOn = dt, DaysOld = daysOld,
+                            DocLink = doc, Version = ver,
+                            InstalledBy = obj["InstalledBy"]?.ToString() ?? "",
+                            FixComments = obj["FixComments"]?.ToString() ?? "",
+                        });
                     }
                 }
             }
@@ -224,7 +235,66 @@ namespace B4Browse
             return list.OrderByDescending(p => p.InstalledOn).ToList();
         }
 
-        private class WindowsPatch { public string HotFixID = ""; public string Description = ""; public DateTime InstalledOn; public int DaysOld; public string DocLink = ""; public string Version = ""; }
+        private class WindowsPatch {
+            public string HotFixID = ""; public string Description = ""; public DateTime InstalledOn;
+            public int DaysOld; public string DocLink = ""; public string Version = "";
+            public string InstalledBy = ""; public string FixComments = "";
+        }
+
+        // The KB number without the "KB" prefix, or "" when the HotFixID isn't a KB entry.
+        private static string KbNumber(WindowsPatch p) =>
+            p.HotFixID.StartsWith("KB", StringComparison.OrdinalIgnoreCase)
+                ? new string(p.HotFixID.Where(char.IsDigit).ToArray())
+                : "";
+
+        private static string PatchLookupLabel(WindowsPatch p) => "Search web";
+
+        // What the Lookup column opens: a web search that reliably surfaces info about the update.
+        private static string PatchSearchUrl(WindowsPatch p)
+        {
+            string q = p.HotFixID.StartsWith("KB", StringComparison.OrdinalIgnoreCase)
+                ? $"Microsoft Windows patch {p.HotFixID}"
+                : $"Microsoft Windows patch {p.HotFixID} {p.Description}";
+            return "https://www.google.com/search?q=" + HttpUtility.UrlEncode(q);
+        }
+
+        private static void ShowPatchMenu(Control owner, WindowsPatch p)
+        {
+            string kb = KbNumber(p);
+            var menu = new ContextMenuStrip();
+
+            menu.Items.Add("Search the web for this update", null, (_, _) => OpenBrowser(PatchSearchUrl(p)));
+            menu.Items.Add("Open Microsoft Update Catalog", null, (_, _) =>
+                OpenBrowser("https://www.catalog.update.microsoft.com/Search.aspx?q=" +
+                            HttpUtility.UrlEncode(p.HotFixID)))
+                .Enabled = kb.Length > 0;
+            menu.Items.Add("Open Microsoft support article", null, (_, _) =>
+                OpenBrowser("https://support.microsoft.com/help/" + kb))
+                .Enabled = kb.Length > 0;
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Show details", null, (_, _) =>
+                CopyableMessageBox.Show(owner.FindForm(), PatchDetails(p),
+                    $"Update {p.HotFixID}", MessageBoxButtons.OK, MessageBoxIcon.Information));
+            menu.Items.Add("Copy HotFix ID", null, (_, _) => { try { Clipboard.SetText(p.HotFixID); } catch { } });
+            menu.Show(Cursor.Position);
+        }
+
+        // Local fallback info, assembled from WMI (Win32_QuickFixEngineering) - no network needed.
+        private static string PatchDetails(WindowsPatch p)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"HotFix ID:    {p.HotFixID}");
+            sb.AppendLine($"Type:         {(p.Description.Length > 0 ? p.Description : "Update")}");
+            sb.AppendLine($"Installed on: {p.InstalledOn:yyyy-MM-dd}  ({p.DaysOld} day(s) ago)");
+            if (p.InstalledBy.Length > 0) sb.AppendLine($"Installed by: {p.InstalledBy}");
+            if (p.Version.Length > 0) sb.AppendLine($"Service pack: {p.Version}");
+            if (p.FixComments.Length > 0) sb.AppendLine($"Comments:     {p.FixComments}");
+            if (p.DocLink.Length > 0) sb.AppendLine($"WMI doc link: {p.DocLink}");
+            sb.AppendLine();
+            sb.AppendLine("Source: WMI Win32_QuickFixEngineering (local).");
+            sb.AppendLine("Use the right-click web search or Update Catalog for the full description online.");
+            return sb.ToString();
+        }
         private static void ShowInstalledMenu(Control owner, InstalledProgram inst) {
             var menu = new ContextMenuStrip();
             var enabled = true;
@@ -1293,16 +1363,21 @@ namespace B4Browse
                 new GridColumn { Header = "Start", Width = 130,
                     Text = o => ((AwakePeriod)o).StartText,
                     Sort = o => ((AwakePeriod)o).Start },
-                new GridColumn { Header = "End", Width = 170,
+                new GridColumn { Header = "Woke by", Width = 170,
+                    Text = o => ((AwakePeriod)o).Why,
+                    FilterKind = ColumnFilterKind.Regex },
+                new GridColumn { Header = "End", Width = 130,
                     Text = o => ((AwakePeriod)o).EndText,
                     Sort = o => ((AwakePeriod)o).EndSort,
                     Style = o => AwakeRowStyle((AwakePeriod)o) },
+                new GridColumn { Header = "Ended", Width = 130,
+                    Text = o => ((AwakePeriod)o).EndModeText,
+                    Sort = o => ((AwakePeriod)o).EndCode,
+                    Style = o => AwakeRowStyle((AwakePeriod)o),
+                    FilterKind = ColumnFilterKind.Regex },
                 new GridColumn { Header = "Duration", Width = 96,
                     Text = o => ((AwakePeriod)o).DurationText,
                     Sort = o => ((AwakePeriod)o).DurationMin },
-                new GridColumn { Header = "Why", Fill = 180,
-                    Text = o => ((AwakePeriod)o).Why,
-                    FilterKind = ColumnFilterKind.Regex },
             };
             return new SortableGrid("Refresh",
                 () => SafetyChecks.GetAwakePeriods().Cast<object>().ToList(),
@@ -2117,6 +2192,99 @@ namespace B4Browse
             menu.Items.Add("Copy sequence #", null, (_, _) => { try { Clipboard.SetText(p.Sequence.ToString()); } catch { } });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Open System Protection", null, (_, _) => StartShell(owner, "SystemPropertiesProtection.exe"));
+            menu.Show(Cursor.Position);
+        }
+
+        // ---- Users: local user accounts ---------------------------------- //
+        public static Control BuildUsers()
+        {
+            var cols = new[]
+            {
+                new GridColumn { Header = "Status", Width = 70,
+                    Text = o => UserStatusLabel((UserAccount)o),
+                    Sort = o => (int)((UserAccount)o).Risk,
+                    Style = o => UserStyle((UserAccount)o) },
+                new GridColumn { Header = "Account", Width = 150, Text = o => ((UserAccount)o).Name },
+                new GridColumn { Header = "Enabled", Width = 70,
+                    Text = o => ((UserAccount)o).Enabled ? "Yes" : "No",
+                    Sort = o => ((UserAccount)o).Enabled ? 0 : 1,
+                    Style = o => ((UserAccount)o).Enabled ? null : ((Color, Color)?)(DisBack, DisFore) },
+                new GridColumn { Header = "Admin", Width = 60,
+                    Text = o => ((UserAccount)o).IsAdmin ? "Yes" : "",
+                    Sort = o => ((UserAccount)o).IsAdmin ? 0 : 1 },
+                new GridColumn { Header = "Created", Width = 95,
+                    Text = o => ((UserAccount)o).CreatedText,
+                    Sort = o => ((UserAccount)o).Created ?? DateTime.MinValue,
+                    Style = o => RecencyStyle(((UserAccount)o).DaysOld) },
+                new GridColumn { Header = "Created src", Width = 90,
+                    Text = o => UserCreatedSrc((UserAccount)o) },
+                new GridColumn { Header = "Last logon", Width = 130,
+                    Text = o => ((UserAccount)o).LastLogonText,
+                    Sort = o => ((UserAccount)o).LastLogon ?? DateTime.MinValue },
+                new GridColumn { Header = "Expires", Width = 90,
+                    Text = o => ((UserAccount)o).AccountExpiresText,
+                    Sort = o => ((UserAccount)o).AccountExpires ?? DateTime.MaxValue },
+                new GridColumn { Header = "Source", Width = 110, Text = o => ((UserAccount)o).Source },
+                new GridColumn { Header = "Full name", Width = 140, Text = o => ((UserAccount)o).FullName },
+                new GridColumn { Header = "Profile path", Fill = 150,
+                    Text = o => { var p = ((UserAccount)o).ProfilePath; return p.Length > 0 ? p : "—"; } },
+                new GridColumn { Header = "Note", Fill = 180, Text = o => ((UserAccount)o).Note },
+            };
+
+            SortableGrid grid = null!;
+            grid = new SortableGrid("Refresh",
+                () => SafetyChecks.GetUserAccounts().Cast<object>().ToList(),
+                cols, defaultSortColumn: 0, defaultAscending: false,
+                help: TabHelp.Users,
+                headerInfo: SafetyChecks.UsersHeader,
+                severity: items =>
+                {
+                    var s = TabSeverity.Ok;
+                    foreach (var o in items)
+                        if (o is UserAccount u) s = Sev.Max(s, u.Risk);
+                    return s;
+                },
+                onRowContext: o => ShowUserMenu(grid, (UserAccount)o));
+            return grid;
+        }
+
+        private static string UserStatusLabel(UserAccount u) => u.Risk switch
+        {
+            TabSeverity.Alert => "Alert",
+            TabSeverity.Caution => "Review",
+            _ => "OK",
+        };
+
+        private static (Color Back, Color Fore)? UserStyle(UserAccount u) => u.Risk switch
+        {
+            TabSeverity.Alert => (RedBack, RedFore),
+            TabSeverity.Caution => (YelBack, YelFore),
+            _ => null,
+        };
+
+        private static string UserCreatedSrc(UserAccount u) => u.CreatedSource switch
+        {
+            "audited" => "audit log",
+            "first logon" => "≈first logon",
+            _ => "—",
+        };
+
+        private static void ShowUserMenu(Control owner, UserAccount u)
+        {
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Copy account name", null, (_, _) => { try { Clipboard.SetText(u.Name); } catch { } });
+            menu.Items.Add("Copy SID", null, (_, _) => { try { Clipboard.SetText(u.Sid); } catch { } })
+                .Enabled = u.Sid.Length > 0;
+            menu.Items.Add("Copy profile path", null, (_, _) => { try { Clipboard.SetText(u.ProfilePath); } catch { } })
+                .Enabled = u.ProfilePath.Length > 0;
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Open profile folder", null, (_, _) => StartShell(owner, u.ProfilePath))
+                .Enabled = u.ProfilePath.Length > 0 && Directory.Exists(u.ProfilePath);
+            menu.Items.Add("Open User Accounts (netplwiz)", null, (_, _) => StartShell(owner, "netplwiz.exe"));
+            menu.Items.Add("Open Local Users & Groups (lusrmgr.msc)", null, (_, _) => StartShell(owner, "lusrmgr.msc"));
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Search the web for this account", null, (_, _) =>
+                OpenBrowser("https://www.google.com/search?q=" + HttpUtility.UrlEncode(u.Name)));
             menu.Show(Cursor.Position);
         }
 

@@ -84,6 +84,8 @@ The idea is to correlate these dates against your known Windows patch cadence: c
 
 - **DNS** — the live Windows resolver cache (`ipconfig /displaydns`): every name recently resolved and the address it returned. A **public-looking host on a non-public (private/loopback) IP** is flagged `Review` — possibly a redirect / captive portal, or legitimate internal / split-horizon DNS. A **Flush DNS cache** button clears the cache (`ipconfig /flushdns`). Note: it's a live snapshot (entries expire per TTL), and Chrome's Secure DNS (DoH) bypasses this cache.
 
+- **Users** — every local user account (`Get-LocalUser`), flagging the ones worth a look: the built-in **Administrator** or **Guest** enabled, an account **hidden** from the sign-in screen, **recently-created** accounts (a classic backdoor / persistence trick — correlate against the Patches date), and **expired-but-enabled** or **dormant** accounts. Shows each account's administrator membership, last sign-in, and expiry. The **Created** date is best-effort: the true time from the Security audit log (event 4720) when run as Administrator, otherwise the profile folder's age as an approximate first-logon proxy — the *Created src* column says which.
+
 ### 3. Right-click actions
 
 Several panels let you **right-click a row** to investigate the item directly:

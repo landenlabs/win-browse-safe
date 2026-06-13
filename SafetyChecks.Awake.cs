@@ -19,6 +19,12 @@ namespace B4Browse
     {
         private const int AwakeDays = 14;
 
+        // Debounce thresholds for Modern Standby (S0) machines, which log frequent connected-standby
+        // cycles (Kernel-Power 506/507) plus short internal sleep blips (42 -> 107 a few seconds apart).
+        private const int MinSleepSec = 60;    // a low-power dip shorter than this is not a real sleep (dropped)
+        private const int MinWakeSec = 180;    // an awake gap shorter than this BETWEEN two sleeps is a
+                                               // maintenance wake, merged so an overnight standby is one period
+
         private enum AwakeKind { Boot, Wake, Sleep, Shutdown }
 
         /// <summary>A single power-state transition pulled from the System log.</summary>
@@ -37,6 +43,8 @@ namespace B4Browse
             var events = ReadPowerEvents();
             events.Sort((a, b) => a.Time.CompareTo(b.Time));        // ascending
             events = CollapsePowerEvents(events);                  // merge duplicate signals of one transition
+            events = DebouncePowerEvents(events);                  // drop S0 blips + merge maintenance wakes
+            events = CollapsePowerEvents(events);                  // re-merge any same-direction left adjacent
 
             var periods = new List<AwakePeriod>();
             PowerEvent? openStart = null;
@@ -82,23 +90,36 @@ namespace B4Browse
             };
 
             DateTime endTime = current ? DateTime.Now : (end?.Time ?? DateTime.MinValue);
+            p.EndModeText = EndModeLabel(code);
 
             if (endTime == DateTime.MinValue)               // unknown end (unexpected, no clean close)
             {
                 p.EndSort = start.Time;
-                p.EndText = $"?  ({code})";
+                p.EndText = "?";
                 p.DurationMin = -1;
                 p.DurationText = "—";
             }
             else
             {
                 p.EndSort = endTime;
-                p.EndText = current ? $"now ({code})" : $"{FmtAwakeTime(endTime)} ({code})";
+                p.EndText = current ? "now" : FmtAwakeTime(endTime);
                 p.DurationMin = (endTime - start.Time).TotalMinutes;
                 p.DurationText = FmtDuration(p.DurationMin);
             }
             return p;
         }
+
+        /// <summary>Spelled-out end mode for the "Ended" column, from the compact end code.</summary>
+        private static string EndModeLabel(string code) => code switch
+        {
+            "off" => "Shutdown",
+            "slp" => "Sleep",
+            "ms" => "Modern standby",
+            "hib" => "Hibernate",
+            "pwr" => "Unexpected",
+            "on" => "Awake now",
+            _ => code,
+        };
 
         // ---- Reading + classifying the System power events ------------------------------- //
         private static List<PowerEvent> ReadPowerEvents()
@@ -107,17 +128,22 @@ namespace B4Browse
 
             // Power/boot/shutdown event IDs in the System log. Provider is checked in C# so an
             // ID that other providers also use (e.g. 12/13) is only honoured from the right source.
+            // 506/507 are Kernel-Power Modern Standby (S0) enter/exit - the real "sleep" on modern
+            // laptops. For event 42, Target is the entered power state (4 = hibernate / S4).
             string script = $@"
 $ErrorActionPreference='SilentlyContinue'
 $start=(Get-Date).AddDays(-{AwakeDays})
 try {{
-  Get-WinEvent -FilterHashtable @{{LogName='System';Id=1,42,107,12,13,1074,6005,6006;StartTime=$start}} -MaxEvents 1000 |
+  Get-WinEvent -FilterHashtable @{{LogName='System';Id=1,42,107,506,507,12,13,1074,6005,6006;StartTime=$start}} -MaxEvents 2000 |
     ForEach-Object {{
       $m=[string]$_.Message
+      $tgt=''
+      if ($_.Id -eq 42 -and $_.Properties.Count -gt 0) {{ try {{ $tgt=[string]$_.Properties[0].Value }} catch {{}} }}
       [pscustomobject]@{{
         Time=$_.TimeCreated.ToString('o')
         Id=[int]$_.Id
         Provider=[string]$_.ProviderName
+        Target=$tgt
         Msg=$m.Substring(0,[Math]::Min(500,$m.Length))
       }}
     }} | ConvertTo-Json -Compress -Depth 3
@@ -127,13 +153,13 @@ try {{
             {
                 if (!DateTime.TryParse(JStr(r, "Time"), null, DateTimeStyles.RoundtripKind, out var t)) continue;
                 DateTime time = t.Kind == DateTimeKind.Utc ? t.ToLocalTime() : t;
-                var pe = ClassifyPowerEvent(JInt(r, "Id"), JStr(r, "Provider"), JStr(r, "Msg"), time);
+                var pe = ClassifyPowerEvent(JInt(r, "Id"), JStr(r, "Provider"), JStr(r, "Msg"), JStr(r, "Target"), time);
                 if (pe != null) list.Add(pe);
             }
             return list;
         }
 
-        private static PowerEvent? ClassifyPowerEvent(int id, string prov, string msg, DateTime time)
+        private static PowerEvent? ClassifyPowerEvent(int id, string prov, string msg, string target, DateTime time)
         {
             bool Is(string name) => prov.Equals(name, StringComparison.OrdinalIgnoreCase);
 
@@ -142,10 +168,14 @@ try {{
                 return new PowerEvent { Time = time, Kind = AwakeKind.Wake, Why = WhyFromWakeSource(ExtractField(msg, "Wake Source:")) };
             if (id == 107 && Is("Microsoft-Windows-Kernel-Power"))
                 return new PowerEvent { Time = time, Kind = AwakeKind.Wake, Why = "Wake" };
+            if (id == 507 && Is("Microsoft-Windows-Kernel-Power"))   // exit Modern Standby
+                return new PowerEvent { Time = time, Kind = AwakeKind.Wake, Why = "Wake" };
 
-            // Sleep / hibernate.
+            // Sleep / hibernate. Event 42 Target = 4 means hibernate (S4); Modern Standby is 506.
             if (id == 42 && Is("Microsoft-Windows-Kernel-Power"))
-                return new PowerEvent { Time = time, Kind = AwakeKind.Sleep, Code = "slp" };
+                return new PowerEvent { Time = time, Kind = AwakeKind.Sleep, Code = target == "4" ? "hib" : "slp" };
+            if (id == 506 && Is("Microsoft-Windows-Kernel-Power"))   // enter Modern Standby (the real sleep on S0 laptops)
+                return new PowerEvent { Time = time, Kind = AwakeKind.Sleep, Code = "ms" };
 
             // Boot.
             if (id == 12 && Is("Microsoft-Windows-Kernel-General"))
@@ -185,6 +215,47 @@ try {{
                 outp.Add(e);
             }
             return outp;
+        }
+
+        /// <summary>
+        /// Removes the two noise patterns a Modern Standby (S0) machine produces, so the table shows
+        /// real rest periods rather than connected-standby churn:
+        ///   1. A short low-power dip - a Sleep immediately followed by a Wake within
+        ///      <see cref="MinSleepSec"/> (the 4-second 42->107 blips, and the 1-2s 506/507 bounce) -
+        ///      isn't a real sleep: drop both transitions so the awake stretch continues.
+        ///   2. A maintenance wake - a Wake (sandwiched between two Sleeps) that re-sleeps within
+        ///      <see cref="MinWakeSec"/> - isn't a real wake: drop both so an overnight standby with
+        ///      periodic wakeups collapses into a single sleep period instead of dozens of rows.
+        /// Iterated to a fixed point, because removing one short interval can expose another. Only
+        /// Sleep/Wake transitions are touched - Boot and Shutdown are real session boundaries.
+        /// </summary>
+        private static List<PowerEvent> DebouncePowerEvents(List<PowerEvent> ev)
+        {
+            bool changed = true;
+            while (changed)
+            {
+                changed = false;
+                for (int i = 0; i + 1 < ev.Count; i++)
+                {
+                    var a = ev[i];
+                    var b = ev[i + 1];
+                    double gap = (b.Time - a.Time).TotalSeconds;
+
+                    // 1. micro-sleep: Sleep -> Wake within MinSleepSec.
+                    if (a.Kind == AwakeKind.Sleep && b.Kind == AwakeKind.Wake && gap < MinSleepSec)
+                    {
+                        ev.RemoveAt(i + 1); ev.RemoveAt(i); changed = true; break;
+                    }
+
+                    // 2. maintenance wake between two sleeps: Sleep -> Wake -> Sleep, the Wake->Sleep gap short.
+                    if (a.Kind == AwakeKind.Wake && b.Kind == AwakeKind.Sleep && gap < MinWakeSec &&
+                        i > 0 && ev[i - 1].Kind == AwakeKind.Sleep)
+                    {
+                        ev.RemoveAt(i + 1); ev.RemoveAt(i); changed = true; break;
+                    }
+                }
+            }
+            return ev;
         }
 
         private static bool IsGenericWhy(string w) => w.Length == 0 || w == "Wake" || w == "Power on";
@@ -287,18 +358,18 @@ try {{
             group.Add(unexpected > 0 ? CheckStatus.Warn : CheckStatus.Info,
                 $"{periods.Count} awake period(s)",
                 unexpected > 0
-                    ? $"{unexpected} ended unexpectedly (no clean sleep/shutdown). End codes: off=shutdown, slp=sleep, pwr=unexpected, on=current."
-                    : "End codes: off=shutdown, slp=sleep, pwr=unexpected, on=current.");
+                    ? $"{unexpected} ended unexpectedly (no clean sleep/shutdown). End codes: off=shutdown, slp=sleep, ms=modern standby, hib=hibernate, pwr=unexpected, on=current."
+                    : "End codes: off=shutdown, slp=sleep, ms=modern standby, hib=hibernate, pwr=unexpected, on=current.");
 
-            group.AddRow(CheckStatus.Info, AwakeReportRow("#", "Start", "End", "Duration", "Why"));
-            group.AddRow(CheckStatus.Info, AwakeReportRow("----", "-------------", "--------------------", "----------", "-----"));
+            group.AddRow(CheckStatus.Info, AwakeReportRow("#", "Start", "Woke by", "End", "Ended", "Duration"));
+            group.AddRow(CheckStatus.Info, AwakeReportRow("----", "-------------", "------------------", "-------------", "--------------", "----------"));
             foreach (var p in periods)
                 group.AddRow(p.Unexpected ? CheckStatus.Warn : CheckStatus.Info,
-                    AwakeReportRow(p.Index.ToString(), p.StartText, p.EndText, p.DurationText, p.Why));
+                    AwakeReportRow(p.Index.ToString(), p.StartText, p.Why, p.EndText, p.EndModeText, p.DurationText));
             return group;
         }
 
-        private static string AwakeReportRow(string n, string start, string end, string dur, string why)
-            => $"  {Trunc(n, 4),-4} {Trunc(start, 14),-14} {Trunc(end, 22),-22} {Trunc(dur, 10),-10} {why}";
+        private static string AwakeReportRow(string n, string start, string wokeBy, string end, string ended, string dur)
+            => $"  {Trunc(n, 4),-4} {Trunc(start, 14),-14} {Trunc(wokeBy, 18),-18} {Trunc(end, 14),-14} {Trunc(ended, 15),-15} {dur}";
     }
 }

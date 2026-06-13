@@ -81,6 +81,7 @@ namespace B4Browse
             "- Firewall - firewall state and rules, with an audit for hole-punching / persistence rules.\n" +
             "- Virus - Microsoft Defender protection state and its threat / scan history.\n" +
             "- Restores - System Restore points; zero points or a disabled service is a ransomware indicator (admin only).\n" +
+            "- Users - local user accounts, flagging hidden, admin, recently-created or dormant accounts.\n" +
             "- Links - curated links to security tools and references.\n");
 
         public static readonly HelpInfo Scan = new("Safety Scan",
@@ -233,7 +234,18 @@ namespace B4Browse
             "# Columns\n" +
             "- Installed - date the update was applied.\n" +
             "- HotFix ID - the KB identifier.\n" +
-            "- DocLink   - opens the Microsoft article for that KB in your browser.\n" +
+            "- Lookup    - click to open a web search for that KB. Windows' own per-update link (WMI " +
+            "Caption) is often missing or points only at the support home page, so a search is used " +
+            "instead because it reliably lands on a description of the update.\n" +
+            "\n" +
+            "# Right-click a row\n" +
+            "- Search the web for this update - the same reliable web search as the Lookup column.\n" +
+            "- Open Microsoft Update Catalog - the authoritative catalog listing for the KB.\n" +
+            "- Open Microsoft support article - the support.microsoft.com KB page (when one exists).\n" +
+            "- Show details - a local, offline summary read from WMI: type, install date and age, who " +
+            "installed it, and any comments - a fallback when you have no network or the online pages are " +
+            "unhelpful.\n" +
+            "- Copy HotFix ID - copies the KB id to the clipboard.\n" +
             "\n" +
             "# Note\n" +
             "This list covers servicing updates that carry a KB number (cumulative and security updates, " +
@@ -550,25 +562,34 @@ namespace B4Browse
             "# Columns\n" +
             "- # - the interval's number (1 = oldest in the window).\n" +
             "- Start - when the machine booted or woke.\n" +
-            "- End - when it next slept or shut down, with a code:\n" +
-            "    (off) clean shutdown   (slp) sleep / hibernate   (pwr) ended unexpectedly (crash / power loss)   (on) still awake now.\n" +
+            "- Woke by - what started the period (the ON side), from the wake source: a power button / " +
+            "lid / input device (User), a scheduled task such as Windows Update or defrag (Scheduler), a " +
+            "Wake-on-LAN packet (Network), or a cold power-on.\n" +
+            "- End - when the period ended (the timestamp).\n" +
+            "- Ended - how it ended (the OFF side): Shutdown, Sleep, Modern standby, Hibernate, " +
+            "Unexpected (crash / power loss with no clean close), or 'Awake now' for the current session.\n" +
             "- Duration - how long the machine stayed awake.\n" +
-            "- Why - what started the period, taken from the wake source: a power button / lid / input " +
-            "device (User), a scheduled task such as Windows Update or defrag (Scheduler), a Wake-on-LAN " +
-            "packet (Network), or a cold power-on.\n" +
             "\n" +
             "# Status colours\n" +
             "- Green  - the current session (still awake).\n" +
             "- Yellow - the period ended unexpectedly (no clean sleep/shutdown was logged).\n" +
             "\n" +
+            "# Modern Standby (S0) laptops\n" +
+            "Most current laptops sleep via Modern Standby (connected standby) rather than classic S3 " +
+            "sleep. That is recorded as Kernel-Power events 506 (enter) / 507 (exit) and shown with the " +
+            "(ms) end code. Such machines wake briefly many times a night for maintenance; B4 Browse merges " +
+            "those - low-power dips under a minute and awake gaps under three minutes between two sleeps are " +
+            "treated as one rest period - so an overnight standby is a single row, not dozens.\n" +
+            "\n" +
             "# Note\n" +
             "Covers the last 14 days. When a shutdown wasn't logged cleanly the End time can't be known, " +
             "so it shows \"? (pwr)\" with no duration. Scheduled-wake task names come straight from the " +
-            "Power-Troubleshooter event text.\n" +
+            "Power-Troubleshooter event text. Hibernate (hib) is detected best-effort from the sleep " +
+            "target state and may appear as (slp) on some hardware.\n" +
             "\n" +
             "# Special actions\n" +
             "- Event Viewer - opens the Windows Event Viewer to inspect the underlying power events.\n" +
-            "- Filter the Why column with a regular expression.\n" +
+            "- Filter the 'Woke by' or 'Ended' column with a regular expression.\n" +
             "\n" + Common);
 
         public static readonly HelpInfo Activity = new("App Launch Activity",
@@ -751,6 +772,60 @@ namespace B4Browse
             "# Note\n" +
             "Before rolling back, be aware malware can survive inside an older restore point; cross-check " +
             "the checkpoint date against any known infection window (e.g. Defender events) first.\n" +
+            "\n" + Common);
+
+        public static readonly HelpInfo Users = new("User Accounts",
+            "# What this shows\n" +
+            "Every local user account on this PC (from Get-LocalUser), with the signals that matter for " +
+            "spotting a rogue or forgotten account: when it was created, when it last signed in, whether " +
+            "it is an administrator, hidden from the sign-in screen, has no password requirement, or has " +
+            "expired but is still enabled. Reading the account list needs no administrator rights.\n" +
+            "\n" +
+            "# Why it matters (security)\n" +
+            "A hidden or unexpected local account - especially one with administrator rights - is a classic " +
+            "persistence / backdoor mechanism. Sort by Status to float flagged accounts to the top, and " +
+            "correlate a recently-created account against the Patches tab date: an account that appeared " +
+            "outside a Windows update window, and that you didn't create, is worth a close look.\n" +
+            "\n" +
+            "# Status (the audit)\n" +
+            "- Alert (red) - the built-in Administrator or Guest account is enabled; an enabled account " +
+            "hidden from the sign-in screen; or a non-built-in account created in the last 7 days.\n" +
+            "- Review (yellow) - created in the last 30 days; expired but still enabled; no password " +
+            "required; or an account that has never signed in and whose creation date can't be determined " +
+            "(the dormant-backdoor pattern).\n" +
+            "- OK - nothing notable.\n" +
+            "\n" +
+            "# The 'Created' column is best-effort\n" +
+            "Windows does not expose a reliable account-creation timestamp through any normal interface, so " +
+            "this column is layered and the 'Created src' column tells you which source each row used:\n" +
+            "- audit log - the true creation time from Security event 4720 (only when running as " +
+            "administrator and the event is still in the log).\n" +
+            "- ≈first logon - the user profile folder's creation date, used as a proxy. This is when the " +
+            "account first signed in and got a profile, which is shortly AFTER it was created - not the " +
+            "creation time itself, and blank for an account that has never signed in.\n" +
+            "- a dash - no creation date could be determined.\n" +
+            "Run the app as administrator to upgrade approximate dates to true ones from the audit log.\n" +
+            "\n" + Recency +
+            "\n" +
+            "# Columns\n" +
+            "- Enabled - whether the account can sign in (disabled accounts are greyed).\n" +
+            "- Admin - a member of the local Administrators group.\n" +
+            "- Last logon - the last interactive sign-in recorded for the account, or 'never'.\n" +
+            "- Expires - the account expiry date, or 'never'.\n" +
+            "- Source - Local, MicrosoftAccount, or AzureAD (from Get-LocalUser's PrincipalSource).\n" +
+            "- Profile path - the account's user-profile root directory (typically C:\\Users\\<name>), read " +
+            "from the registry. A dash means the account has never signed in, so no profile folder exists yet.\n" +
+            "- Note - why the row is flagged.\n" +
+            "\n" +
+            "# Special actions\n" +
+            "- Right-click a row to copy the account name, SID or profile path, open the profile folder in " +
+            "Explorer, open User Accounts (netplwiz) or Local Users & Groups (lusrmgr.msc), or search the " +
+            "web for the account name.\n" +
+            "\n" +
+            "# Note\n" +
+            "This lists local SAM accounts only. Domain and Azure AD accounts that have signed in appear as " +
+            "profiles but not as local accounts; the header notes how many such profiles exist. " +
+            "lusrmgr.msc is not present on Windows Home editions - use netplwiz there.\n" +
             "\n" + Common);
 
         public static readonly HelpInfo Links = new("Tools & Links",

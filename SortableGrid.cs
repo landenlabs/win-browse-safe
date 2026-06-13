@@ -24,6 +24,7 @@ namespace B4Browse
         public bool Link = false;                             // render as a clickable link cell
         public string ButtonText = "";
         public Func<object, string> Text = _ => "";           // cell display text
+        public Func<object, string>? LinkTarget = null;       // for Link cells: URL to open (defaults to the displayed Text)
         public Func<object, IComparable>? Sort = null;        // sort key (defaults to Text)
         public Func<object, (Color Back, Color Fore)?>? Style = null; // per-cell colour
         public ColumnFilterKind FilterKind = ColumnFilterKind.None;   // interactive filter, if any
@@ -897,8 +898,12 @@ namespace B4Browse
             // Link cell click: open URL if the column is a link
             if (e.ColumnIndex >= 0 && e.ColumnIndex < _cols.Length && _cols[e.ColumnIndex].Link)
             {
-                var cell = _grid.Rows[e.RowIndex].Cells[e.ColumnIndex];
-                var text = cell.Value?.ToString();
+                var col = _cols[e.ColumnIndex];
+                // A column may open a different URL than it displays (e.g. show "Search web",
+                // open a search query). Fall back to the displayed cell text when unset.
+                string? text = col.LinkTarget != null && _grid.Rows[e.RowIndex].Tag is { } rowItem
+                    ? col.LinkTarget(rowItem)
+                    : _grid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString();
                 if (string.IsNullOrEmpty(text)) return;
                 // chrome:// URIs can't be shell-launched; route them through the same handler
                 // the header deep-links use (chrome.exe + clipboard fallback).

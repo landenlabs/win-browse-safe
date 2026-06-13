@@ -366,6 +366,7 @@ namespace B4Browse
             AddViewTab("Virus", "virus", TabViews.BuildVirus());
             if (Elevation.IsAdmin)
                 AddViewTab("Restores", "restores", TabViews.BuildRestores());
+            AddViewTab("Users", "users", TabViews.BuildUsers());
 
             AddViewTab("Tools", "links", TabViews.BuildLinks());
 
@@ -760,6 +761,7 @@ namespace B4Browse
             ["rootca"] = "Trusted root certificate authorities",
             ["firewall"] = "Windows Firewall configuration",
             ["restores"] = "System Restore points",
+            ["users"] = "Local user accounts",
         };
 
         /// <summary>Tab/banner background colour for a severity (selected = stronger shade).</summary>

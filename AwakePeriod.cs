@@ -16,8 +16,9 @@ namespace B4Browse
         public string StartText = "";     // "6-Jun 11:23am"
 
         public DateTime EndSort;          // for sorting the End column (now for current, Start when unknown)
-        public string EndText = "";       // "6-Jun 3:14pm (off)" / "now (on)" / "? (pwr)"
-        public string EndCode = "";       // off / slp / pwr / on
+        public string EndText = "";       // end timestamp only: "6-Jun 3:14pm" / "now" / "?"
+        public string EndCode = "";       // off / slp / ms / hib / pwr / on
+        public string EndModeText = "";   // spelled-out end mode: Shutdown / Sleep / Modern standby / Hibernate / Unexpected / Awake now
 
         public double DurationMin;        // -1 when unknown
         public string DurationText = "";  // "45.0 min" / "3h 51m" / "—"

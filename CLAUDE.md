@@ -23,10 +23,12 @@ B4Browse.exe --run events --out events.txt   # also write report to a file
 ```
 
 Scopes: `scan, dns, arp, patches, chrome, settings, services, processes, startup, scheduled,
-installed, devices, winext, events, activity, downloads, firewall, virus, restores, all` (the
+installed, devices, winext, events, activity, downloads, firewall, virus, restores, users, all` (the
 catalog in `Reports.cs` is the source of truth). `events` needs Administrator to read the Security log;
 `downloads` needs Administrator to read the SRUM database; `virus` reads protection state without
-elevation but needs Administrator for the Defender threat/scan history (the event log).
+elevation but needs Administrator for the Defender threat/scan history (the event log); `users` lists
+local accounts without elevation but needs Administrator for true creation dates (Security event 4720;
+otherwise the profile-folder age is used as an approximate first-logon proxy).
 
 `install.bat` publishes a self-contained single-file exe (`win-x64`) and copies it to
 `c:\opt\bin`. All runtime assets (icon, brand images, links page) are embedded, so the
@@ -91,12 +93,13 @@ The whole app is built on one small data model and a central catalog:
 | `SafetyChecks.Defender.cs` | Defender protection state (WMI `MSFT_MpComputerStatus`) + threat/scan history (Defender Operational event log) — the Virus tab |
 | `SafetyChecks.SecurityCenter.cs` | Windows Security Center (`root\SecurityCenter2`) registered antivirus/firewall products — feeds the Virus tab (alternate AV, e.g. CrowdStrike) and the Firewall tab (third-party firewall provider) |
 | `SafetyChecks.Restore.cs` | System Restore points |
+| `SafetyChecks.Users.cs` | Local user accounts (`Get-LocalUser`) + Administrators membership, hidden/`SpecialAccounts`, layered creation date (event 4720 → profile-folder ctime → unknown) — the Users tab |
 
 ### Row model / DTO classes
 One small record-like class per item type, consumed by the grids:
 `AppActivity`, `ArpEntry`, `ChromeExtension`, `DeviceDriver`, `DnsCacheEntry`, `EventItem`,
 `FirewallRule`, `InstalledProgram`, `ProcessItem`, `RestorePoint`, `ScheduledTaskItem`,
-`ServiceInfo`, `ShellExtension`, `SruNetUsage`, `StartupItem`. The Settings tab uses a small matrix model
+`ServiceInfo`, `ShellExtension`, `SruNetUsage`, `StartupItem`, `UserAccount`. The Settings tab uses a small matrix model
 instead (`ChromeSettingsMatrix.cs`: `ChromeSettingsMatrix` / `SettingRow` / `ColumnDef`). The
 Virus tab uses `DefenderModels.cs`: `DefenderStatusSummary` (WMI state), `ThreatDetectionRecord` /
 `ScanHistoryRecord` (parsed events), and `DefenderTimelineRow` (the merged grid row).

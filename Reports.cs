@@ -44,6 +44,7 @@ namespace B4Browse
             ("firewall",  "Firewall", new Func<CheckGroup>[] { SafetyChecks.CheckFirewall, SafetyChecks.CheckFirewallRules }),
             ("virus",     "Virus", new Func<CheckGroup>[] { SafetyChecks.VirusHeader, SafetyChecks.CheckVirus }),
             ("restores",  "Restore Points", new Func<CheckGroup>[] { SafetyChecks.CheckRestore }),
+            ("users",     "User Accounts", new Func<CheckGroup>[] { SafetyChecks.CheckUsers }),
         };
 
         public static IEnumerable<string> Scopes => Catalog.Select(c => c.Key).Append("all");
