@@ -12,11 +12,16 @@ namespace B4Browse
     public class AboutForm : Form
     {
         private PictureBox _picture = null!;
+        private PictureBox _appIcon = null!;     // app launch icon shown left of the title block
         private Label _title = null!;
         private Label _version = null!;
-        private TextBox _desc = null!;
-        private LinkLabel _link = null!;
+        private Button _introButton = null!;    // opens the Introduction / welcome Help page
+        private Button _repoButton = null!;      // opens the GitHub repository in the browser
+        private Button _updateButton = null!;    // checks GitHub for a newer release (then offers download)
+        private Label _updateStatus = null!;     // result line under the update button
         private Button _ok = null!;
+        private Image? _introIcon;               // app icon banner reused on the Intro page
+        private string? _pendingDownloadUrl;     // set once an update is found; next click opens it
 
         private Image? _animImage;
         private MemoryStream? _animStream;
@@ -30,7 +35,7 @@ namespace B4Browse
             Icon = EmbeddedAssets.LoadIcon("icon.ico");
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(420, 320);
+            ClientSize = new Size(420, 400);
             MaximizeBox = false;
             MinimizeBox = false;
 
@@ -51,7 +56,7 @@ namespace B4Browse
                 Height = 24,
                 Font = new Font("Segoe UI", 11f, FontStyle.Bold),
                 Text = "B4 Browse - Chrome Safety Check",
-                TextAlign = ContentAlignment.MiddleCenter,
+                TextAlign = ContentAlignment.MiddleLeft,
             };
 
             _version = new Label
@@ -62,32 +67,49 @@ namespace B4Browse
                 Height = 18,
                 Font = new Font("Segoe UI", 9f, FontStyle.Regular),
                 ForeColor = Theme.Subtle,
+                TextAlign = ContentAlignment.MiddleLeft,
+            };
+
+            // Reuse the app icon as the banner shown atop the Introduction page (same as the
+            // left-panel Intro button in MainForm).
+            try { if (Icon != null) _introIcon = new Icon(Icon, new Size(64, 64)).ToBitmap(); } catch { }
+
+            _appIcon = new PictureBox
+            {
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.Transparent,
+                Image = _introIcon,   // shared with the Intro page header; disposed once on close
+            };
+
+            _introButton = new Button
+            {
+                Text = "ℹ  Introduction",
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+            };
+            _introButton.Click += (_, _) => HelpUi.Show(this, TabHelp.Intro with { Header = _introIcon });
+
+            _repoButton = new Button
+            {
+                Text = "🌐  Open GitHub repository",
+                Cursor = Cursors.Hand,
+            };
+            _repoButton.Click += (_, _) => OpenUrl(UpdateCheck.RepoUrl);
+
+            _updateButton = new Button
+            {
+                Text = "⟳  Check for updates",
+                Cursor = Cursors.Hand,
+            };
+            _updateButton.Click += UpdateButton_Click;
+
+            _updateStatus = new Label
+            {
+                AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Theme.Subtle,
+                Text = "",
             };
-
-            _desc = new TextBox
-            {
-                Left = 12,
-                Top = _version.Bottom + 8,
-                Width = ClientSize.Width - 24,
-                Height = 120,
-                Multiline = true,
-                ReadOnly = true,
-                BorderStyle = BorderStyle.None,
-                BackColor = SystemColors.Window,
-                Text = "A small tool to inspect Chrome, extensions, and local system indicators relevant to browsing safety.",
-            };
-
-            _link = new LinkLabel
-            {
-                Left = 12,
-                Top = _desc.Bottom + 8,
-                Width = ClientSize.Width - 140,
-                Height = 20,
-                Text = "https://github.com/landenlabs/win-b4-browse",
-                LinkBehavior = LinkBehavior.HoverUnderline
-            };
-            _link.LinkClicked += (_, _) => { try { var psi = new ProcessStartInfo(_link.Text) { UseShellExecute = true }; Process.Start(psi); } catch { } };
 
             _ok = new Button
             {
@@ -102,11 +124,16 @@ namespace B4Browse
 
             // Add controls in top-to-bottom order so Dock/Top layout behaves predictably
             Controls.Add(_picture);
+            Controls.Add(_appIcon);
             Controls.Add(_title);
             Controls.Add(_version);
-            Controls.Add(_desc);
-            Controls.Add(_link);
+            Controls.Add(_introButton);
+            Controls.Add(_repoButton);
+            Controls.Add(_updateButton);
+            Controls.Add(_updateStatus);
             Controls.Add(_ok);
+
+            LayoutBody();
 
             Load += AboutForm_Load;
             FormClosed += AboutForm_FormClosed;
@@ -135,12 +162,8 @@ namespace B4Browse
                     _picture.Left = 12;
                     _picture.Image = _animImage;
 
-                    // Move subsequent controls below the image
-                    _title.Top = _picture.Bottom + 8;
-                    _version.Top = _title.Bottom + 4;
-                    _desc.Top = _version.Bottom + 8;
-                    _link.Top = _desc.Bottom + 8;
-                    _ok.Top = ClientSize.Height - 42;
+                    // Re-flow the title/version/buttons below the (now sized) image.
+                    LayoutBody();
 
                     var dim = new FrameDimension(_animImage.FrameDimensionsList[0]);
                     _frameCount = _animImage.GetFrameCount(dim);
@@ -233,6 +256,81 @@ namespace B4Browse
             catch { }
 
             return null;
+        }
+
+        // Positions the title, version, and the three stacked buttons + status line relative to the
+        // bottom of the (possibly resized) picture box. Called once from the constructor and again
+        // from Load after the brand image is sized. The OK button stays bottom-right anchored.
+        private void LayoutBody()
+        {
+            // Header row: app icon on the left, title + version stacked to its right.
+            const int iconSize = 48;
+            int headerTop = _picture.Bottom + 10;
+            int textLeft = 24 + iconSize + 12;
+            int textWidth = ClientSize.Width - textLeft - 12;
+            _title.SetBounds(textLeft, headerTop, textWidth, 24);
+            _version.SetBounds(textLeft, _title.Bottom + 2, textWidth, 18);
+            // Vertically centre the icon against the two-line title/version block.
+            int iconTop = headerTop + ((_version.Bottom - headerTop) - iconSize) / 2;
+            _appIcon.SetBounds(24, iconTop, iconSize, iconSize);
+
+            int headerBottom = Math.Max(_version.Bottom, _appIcon.Bottom);
+
+            const int bw = 260, bh = 30;
+            int bx = (ClientSize.Width - bw) / 2;
+            _introButton.SetBounds(bx, headerBottom + 14, bw, bh);
+            _repoButton.SetBounds(bx, _introButton.Bottom + 8, bw, bh);
+            _updateButton.SetBounds(bx, _repoButton.Bottom + 8, bw, bh);
+            _updateStatus.SetBounds(12, _updateButton.Bottom + 8, ClientSize.Width - 24, 34);
+
+            // Grow the dialog to fit the content so the OK button always clears the status line,
+            // then pin OK to the bottom-right. The banner image height is dynamic, so the required
+            // height can't be a fixed constant.
+            int desired = _updateStatus.Bottom + 12 + _ok.Height + 12;
+            if (ClientSize.Height != desired)
+                ClientSize = new Size(ClientSize.Width, desired);
+            _ok.SetBounds(ClientSize.Width - _ok.Width - 12, ClientSize.Height - _ok.Height - 12, _ok.Width, _ok.Height);
+        }
+
+        // Once an update has been found, the button doubles as a "download" action and opens the
+        // release page; otherwise it runs the GitHub check and reports the result inline.
+        private async void UpdateButton_Click(object? sender, EventArgs e)
+        {
+            if (_pendingDownloadUrl != null)
+            {
+                OpenUrl(_pendingDownloadUrl);
+                return;
+            }
+
+            _updateButton.Enabled = false;
+            _updateStatus.ForeColor = Theme.Subtle;
+            _updateStatus.Text = "Checking GitHub for a newer release…";
+
+            UpdateInfo info = await UpdateCheck.CheckAsync();
+
+            _updateButton.Enabled = true;
+            if (info.Error != null)
+            {
+                _updateStatus.ForeColor = Color.FromArgb(200, 80, 80);
+                _updateStatus.Text = "Update check failed: " + info.Error;
+            }
+            else if (info.Available)
+            {
+                _pendingDownloadUrl = info.ReleaseUrl;
+                _updateButton.Text = $"⬇  Download {info.LatestVersion}";
+                _updateStatus.ForeColor = Theme.Link;
+                _updateStatus.Text = $"New version {info.LatestVersion} available — you have {info.CurrentVersion}.";
+            }
+            else
+            {
+                _updateStatus.ForeColor = Theme.Subtle;
+                _updateStatus.Text = $"You're up to date (version {info.CurrentVersion}).";
+            }
+        }
+
+        private static void OpenUrl(string url)
+        {
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
         }
 
         private void AboutForm_FormClosed(object? sender, FormClosedEventArgs e)
