@@ -87,7 +87,9 @@ $ev | Where-Object {{ $_ -ne $null }} | ForEach-Object {{
 
                 // The level-based and id-based queries can overlap (e.g. an Error that is
                 // also one of the explicit IDs); de-dup on time+channel+id.
-                string key = $"{e.TimeSort.Ticks}|{e.Channel}|{e.EventId}";
+                // DLang - remove time from key to remove more duplicates
+                // string key = $"{e.TimeSort.Ticks}|{e.Channel}|{e.EventId}";
+                string key = $"{e.Channel}|{e.EventId}|{e.Message}";
                 if (!seen.Add(key)) continue;
 
                 list.Add(e);
