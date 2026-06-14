@@ -52,6 +52,14 @@ namespace B4Browse
                 return;
             }
 
+            int dump = Array.FindIndex(args, a => a.Equals("--dump-scripts", StringComparison.OrdinalIgnoreCase));
+            if (dump >= 0)
+            {
+                string dir = (dump + 1 < args.Length && !args[dump + 1].StartsWith("-")) ? args[dump + 1] : "scripts";
+                DumpScripts(dir);
+                return;
+            }
+
             ApplicationConfiguration.Initialize();
             Theme.Load();
             Theme.Apply(Theme.Current); // apply saved light/dark mode before any window is shown
@@ -98,12 +106,17 @@ USAGE:
   B4Browse.exe --run <scope>   Run checks headless and print a text report.
   B4Browse.exe --report        Alias for: --run scan
   B4Browse.exe --inventory     Alias for: --run all
+  B4Browse.exe --dump-scripts [dir]
+                               Write every PowerShell script / external command the
+                               app runs (one file per check) to [dir] (default: scripts).
   B4Browse.exe --help          Show this help and exit.
 
 OPTIONS:
-  --run <scope>     Which checks to run. Defaults to 'all' if <scope> is omitted.
-  --out <file>      Also write the report text to <file> (headless modes only).
-  --help, -h, /?    Show this help and exit.
+  --run <scope>        Which checks to run. Defaults to 'all' if <scope> is omitted.
+  --out <file>         Also write the report text to <file> (headless modes only).
+  --dump-scripts [dir] Extract the data-collection scripts to [dir] (run elevated for
+                       full coverage of the Administrator-only checks).
+  --help, -h, /?       Show this help and exit.
 
 SCOPES:
   {scopes}
@@ -152,6 +165,37 @@ EXAMPLES:
             catch (Exception ex)
             {
                 Console.Error.WriteLine("Report failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Headless "extract the collection scripts" mode. Turns on <see cref="ScriptDump"/>, then
+        /// runs every check (via the 'all' report) so each PowerShell script and external command
+        /// the app executes is written, one file per originating check, into <paramref name="dir"/>.
+        /// Run elevated to also capture the Administrator-only checks.
+        /// </summary>
+        static void DumpScripts(string dir)
+        {
+            EnsureConsole();
+            try
+            {
+                ScriptDump.Enable(dir);
+                Console.Error.WriteLine($"Dumping collection scripts to {Path.GetFullPath(dir)} ...");
+
+                // Exercising the 'all' report runs every catalog producer, which is what invokes
+                // the PowerShell / external-command runners that ScriptDump hooks.
+                Reports.Build("all", (n, total, label, done) =>
+                    Console.Error.WriteLine($"{label} ({n} of {total}) - {(done ? "done" : "started")}"));
+
+                ScriptDump.WriteIndex();
+                Console.WriteLine($"Wrote {ScriptDump.FileCount} script file(s) + README.md to {Path.GetFullPath(dir)}");
+                if (!Elevation.IsAdmin)
+                    Console.Error.WriteLine("(not elevated: Administrator-only checks were skipped - " +
+                        "re-run from an elevated prompt for full coverage)");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("Dump failed: " + ex.Message);
             }
         }
 

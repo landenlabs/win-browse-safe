@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -80,6 +81,7 @@ namespace B4Browse
         private int _sortCol;
         private bool _asc;
         private bool _loading;
+        private CancellationTokenSource? _cts;
         private int _buttonColIndex = -1;
         // True when the next Populate should re-fit column widths to content (set on data/scale
         // changes, cleared after fitting). Pure view changes - sort, filter, theme - leave it
@@ -312,6 +314,8 @@ namespace B4Browse
             Controls.Add(top);
 
             Controls.Add(_busy);
+            _busy.ShowCancel = true;
+            _busy.Cancelled += OnCancelRequested;
             Resize += (_, _) => CenterBusy();
 
             Theme.Changed += OnThemeChanged;
@@ -430,38 +434,73 @@ namespace B4Browse
             _refresh.Enabled = false;
             _status.Text = "Loading …";
 
+            _cts = new CancellationTokenSource();
+            var token = _cts.Token;
+
             CenterBusy();
             _busy.Start();
+            bool cancelled = false;
             try
             {
                 string? summaryText = null;
                 CheckGroup? headerGroup = null;
-                _items = await Task.Run(() =>
+
+                // The loader is synchronous and not itself cancellable, but its blocking calls are
+                // bounded by their own timeouts. On cancel we stop awaiting and abandon the worker -
+                // it finishes on its own within those bounds (same pattern as ResultsView).
+                var work = Task.Run(() =>
                 {
                     if (_summary != null) summaryText = SafeSummary();
                     if (_headerInfo != null) { try { headerGroup = _headerInfo(); } catch { /* ignore */ } }
                     return _loader();
                 });
+                var done = await Task.WhenAny(work, Task.Delay(Timeout.Infinite, token));
+                if (done != work)
+                {
+                    // Abandoned: swallow any later fault so it isn't an unobserved task exception.
+                    _ = work.ContinueWith(static t => { _ = t.Exception; },
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+                    cancelled = true;
+                }
+                else
+                {
+                    _items = await work;
+                    _lastHeader = headerGroup;
+                    if (_header != null && headerGroup != null) RenderHeader(headerGroup);
+                    RebuildFilterChoices();
+                    SortItems();
+                    _autoFitPending = true;        // new data: re-fit column widths to its content
+                    Populate();
 
-                _lastHeader = headerGroup;
-                if (_header != null && headerGroup != null) RenderHeader(headerGroup);
-                RebuildFilterChoices();
-                SortItems();
-                _autoFitPending = true;        // new data: re-fit column widths to its content
-                Populate();
-
-                string count = $"{_items.Count} item(s)   -   {DateTime.Now:HH:mm:ss}";
-                _status.Text = summaryText != null ? $"{summaryText}      |      {count}" : count;
+                    string count = $"{_items.Count} item(s)   -   {DateTime.Now:HH:mm:ss}";
+                    _status.Text = summaryText != null ? $"{summaryText}      |      {count}" : count;
+                }
             }
             finally
             {
                 _busy.Stop();
-                HasRun = true;
+                if (!cancelled) HasRun = true;
                 _refresh.Enabled = true;
                 _loading = false;
+                _cts.Dispose();
+                _cts = null;
             }
+
+            // A cancelled run leaves any previously loaded rows and severity untouched.
+            if (cancelled)
+            {
+                _status.Text = HasRun ? "Cancelled - previous results shown." : "Cancelled.";
+                return;
+            }
+
             Severity = _severityEval?.Invoke(_items) ?? TabSeverity.None;
             SeverityChanged?.Invoke();
+        }
+
+        private void OnCancelRequested()
+        {
+            _status.Text = "Cancelling …";
+            _cts?.Cancel();
         }
 
         private string SafeSummary()
@@ -541,10 +580,8 @@ namespace B4Browse
         {
             if (e.Button != MouseButtons.Left) return;
             string? uri = HeaderLinkAt(e.Location);
-            if (uri != null) OpenSettingUri(uri, e.Location);
+            if (uri != null) OpenSettingUri(uri);
         }
-
-        private readonly ToolTip _linkTip = new();
 
         // Held in a field so it is not garbage-collected; a ToolTip with no live reference
         // stops showing. Backs the "All" toggle's hover tooltip on every tab.
@@ -563,7 +600,7 @@ namespace B4Browse
         /// picker drops the argument), so we also copy the URL to the clipboard and tell the
         /// user to paste it into the address bar - which always works.
         /// </summary>
-        private void OpenSettingUri(string uri, Point at)
+        private void OpenSettingUri(string uri)
         {
             bool isChrome = uri.StartsWith("chrome://", StringComparison.OrdinalIgnoreCase);
             if (isChrome)
@@ -587,10 +624,9 @@ namespace B4Browse
             if (isChrome)
             {
                 SetStatus($"Copied {uri}  -  press Ctrl+V in Chrome's address bar to open it.");
-                if (_header != null)
-                    try { _linkTip.Show($"Copied to clipboard - paste (Ctrl+V) into\nChrome's address bar:\n{uri}",
-                                        _header, at.X, at.Y + 18, 3500); }
-                    catch { /* tooltip is best-effort */ }
+                // Chrome's profile picker drops the URL argument, so float a delayed reminder over
+                // Chrome explaining how to paste the (already-copied) address. Suppressible by the user.
+                ChromeHint.ShowAfterLaunch(uri);
             }
         }
 
@@ -920,8 +956,7 @@ namespace B4Browse
                 // the header deep-links use (chrome.exe + clipboard fallback).
                 if (text.StartsWith("chrome://", StringComparison.OrdinalIgnoreCase))
                 {
-                    var rect = _grid.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, false);
-                    OpenSettingUri(text, new Point(rect.Left, rect.Bottom));
+                    OpenSettingUri(text);
                     return;
                 }
                 try { Process.Start(new ProcessStartInfo(text) { UseShellExecute = true }); }

@@ -99,6 +99,9 @@ namespace B4Browse
         private static string? RunCapture(string fileName, string args, int timeoutMs = 30000,
             bool includeStdErr = false, [CallerMemberName] string source = "")
         {
+            // Record the external command line when the --dump-scripts mode is on.
+            if (ScriptDump.Enabled) ScriptDump.Record("cmd", source, $"{fileName} {args}".TrimEnd());
+
             var psi = new ProcessStartInfo
             {
                 FileName = fileName,

@@ -82,7 +82,25 @@ namespace B4Browse
             "- Virus - Microsoft Defender protection state and its threat / scan history.\n" +
             "- Restores - System Restore points; zero points or a disabled service is a ransomware indicator (admin only).\n" +
             "- Users - local user accounts, flagging hidden, admin, recently-created or dormant accounts.\n" +
-            "- Links - curated links to security tools and references.\n");
+            "- Links - curated links to security tools and references.\n" +
+            "\n" +
+            "# Command line (advanced)\n" +
+            "Most people will only ever use this window, but B4 Browse can also run from a terminal " +
+            "(PowerShell or Command Prompt) - useful for saving a report, scheduling an unattended check, " +
+            "or auditing exactly how it gathers its data:\n" +
+            "\n" +
+            "- B4Browse.exe --run <scope>  - run one area's checks and print a plain-text report. A scope is a " +
+            "tab name (scan, dns, patches, installed, processes, events, virus, users, ...) or all for everything.\n" +
+            "- B4Browse.exe --report  - shorthand for --run scan;  --inventory  - shorthand for --run all.\n" +
+            "- B4Browse.exe --out <file>  - also write the report to a file (pairs with any --run mode).\n" +
+            "- B4Browse.exe --dump-scripts [dir]  - save every PowerShell script and command the app runs, one " +
+            "file per check, to [dir] (default: scripts) - so you can see exactly how each tab collects its data.\n" +
+            "- B4Browse.exe --help  - list every option and scope.\n" +
+            "\n" +
+            "> Example:   B4Browse.exe --run events --out events.txt\n" +
+            ">\n" +
+            "> The report prints to standard output (progress goes to standard error), so it pipes and redirects " +
+            "like any console program. Run from an elevated terminal to include the Administrator-only checks.\n");
 
         public static readonly HelpInfo Scan = new("Safety Scan",
             "# What this tab does\n" +

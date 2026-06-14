@@ -1,0 +1,8 @@
+# B4 Browse - data-collection command
+# Check:  QueryWlanInterfaces
+# Runner: RunCapture - launched as an external process (no window; stdout captured).
+# Note:   Generated snapshot of what the app runs; interpolated values reflect
+#         the machine it was generated on. Regenerate: B4Browse.exe --dump-scripts <dir>
+# ========================================================================
+
+netsh.exe wlan show interfaces

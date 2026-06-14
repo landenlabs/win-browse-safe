@@ -599,6 +599,9 @@ $r | ConvertTo-Json -Compress -Depth 5
         private static JsonElement? RunPowerShellJson(
             string script, int timeoutMs = DefaultPsTimeoutMs, [CallerMemberName] string source = "")
         {
+            // Record the readable script (not the base64 form) when the --dump-scripts mode is on.
+            if (ScriptDump.Enabled) ScriptDump.Record("ps", source, script);
+
             // -EncodedCommand (base64 UTF-16LE) runs multi-line scripts reliably and
             // sidesteps stdin/quoting issues. Progress/verbose streams go to stderr,
             // which we drain but otherwise ignore, so stdout stays clean JSON.
